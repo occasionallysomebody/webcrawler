@@ -1,0 +1,122 @@
+{
+  "Source": {
+    "source_id": "eiti",
+    "name": "Extractive Industries Transparency Initiative",
+    "tier": "tier_1",
+    "publisher_type": "multilateral",
+    "base_url": "https://eiti.org",
+    "access_method": "sitemap",
+    "rate_limit_seconds": 2.0,
+    "robots_required": true,
+    "notes": "Baseline governance source.",
+    "enabled": true,
+    "sitemap_url": "https://eiti.org/sitemap.xml",
+    "rss_url": null,
+    "api_url": null,
+    "allowed_paths": [
+      "/"
+    ],
+    "blocked_paths": [],
+    "language": "en",
+    "country": null,
+    "domain_tags": [
+      "governance",
+      "transparency"
+    ],
+    "known_bias_or_limitation": "Institutional perspective.",
+    "last_checked_at": "2026-06-03T00:00:00+00:00"
+  },
+  "CrawlRun": {
+    "run_id": "20260603-demo",
+    "started_at": "2026-06-03T00:00:00+00:00",
+    "finished_at": "2026-06-03T00:05:00+00:00",
+    "status": "success",
+    "enabled_stages": [
+      "validate_sources",
+      "discover_items"
+    ],
+    "max_sources": 2,
+    "max_items_per_source": 10,
+    "max_fetches": 5,
+    "output_dir": "outputs/runs/20260603-demo",
+    "cache_raw": true,
+    "default_timeout_seconds": 20.0,
+    "default_user_agent": "webcrawler/0.1 (+https://example.com/contact)",
+    "respect_robots": true,
+    "errors": []
+  },
+  "DiscoveredItem": {
+    "item_id": "eiti-article-1",
+    "source_id": "eiti",
+    "url": "https://eiti.org/articles/azerbaijan-update",
+    "discovery_method": "sitemap",
+    "discovered_at": "2026-06-03T00:01:00+00:00",
+    "title": "Azerbaijan update",
+    "published_at": "2026-05-30T00:00:00+00:00",
+    "content_type_hint": "text/html",
+    "normalized_url": "https://eiti.org/articles/azerbaijan-update"
+  },
+  "FetchedDocument": {
+    "document_id": "doc-001",
+    "source_id": "eiti",
+    "url": "https://eiti.org/articles/azerbaijan-update",
+    "final_url": "https://eiti.org/articles/azerbaijan-update",
+    "status_code": 200,
+    "content_type": "text/html; charset=utf-8",
+    "retrieved_at": "2026-06-03T00:02:00+00:00",
+    "checksum": "sha256:abc123",
+    "raw_cache_path": "outputs/runs/20260603-demo/raw_cache/doc-001.html",
+    "fetch_error": null,
+    "etag": "\"abc123\"",
+    "last_modified": "Tue, 02 Jun 2026 18:00:00 GMT"
+  },
+  "ExtractedDocument": {
+    "document_id": "doc-001",
+    "source_id": "eiti",
+    "url": "https://eiti.org/articles/azerbaijan-update",
+    "title": "Azerbaijan update",
+    "published_at": "2026-05-30T00:00:00+00:00",
+    "extracted_text": "Azerbaijan published an energy transparency update.",
+    "extraction_method": "trafilatura",
+    "extraction_quality": "high",
+    "page_count": 1,
+    "error": null
+  },
+  "CleanDocument": {
+    "document_id": "doc-001",
+    "clean_text": "Azerbaijan published an energy transparency update.",
+    "cleaning_method": "normalize_whitespace",
+    "word_count": 6,
+    "language": "en",
+    "quality_flags": [],
+    "source_id": "eiti",
+    "redacted_text": null,
+    "redaction_count": 0,
+    "redaction_types": []
+  },
+  "Claim": {
+    "claim_id": "claim-001",
+    "document_id": "doc-001",
+    "claim_text": "Azerbaijan published an energy transparency update.",
+    "claim_type": "governance_update",
+    "entities": [
+      "Azerbaijan",
+      "energy transparency"
+    ],
+    "evidence_excerpt": "Azerbaijan published an energy transparency update.",
+    "extraction_method": "rule_based",
+    "confidence": 0.8,
+    "source_url": "https://eiti.org/articles/azerbaijan-update",
+    "analyst_notes": null
+  },
+  "TrustScore": {
+    "claim_id": "claim-001",
+    "source_tier_score": 0.9,
+    "freshness_score": 0.8,
+    "corroboration_score": 0.3,
+    "independence_score": 0.7,
+    "conflict_penalty": 0.0,
+    "final_score": 0.74,
+    "score_explanation": "Strong source tier with recent publication, limited corroboration."
+  }
+}
