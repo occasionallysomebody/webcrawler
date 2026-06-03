@@ -10,7 +10,7 @@ This is not only an academic literature crawler and not a generic news scraper. 
 
 ## 2. Why This Should Interest CYNICS Researchers
 
-The assignment should connect commercial web crawling to research themes visible in the CYNICS publication record, especially work by Arvind Sundaram and Hany S. Abdel-Khalik.
+The assignment should connect commercial web crawling to research themes visible in the CYNICS publication record.
 
 Relevant research themes:
 

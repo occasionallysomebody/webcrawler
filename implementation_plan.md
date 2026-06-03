@@ -55,12 +55,16 @@ notebooks/
 outputs/
 src/crawler/
 tests/fixtures/
+pyproject.toml
 ```
 
 Acceptance criteria:
 
 - The folder structure exists.
 - The project has a short `README.md` explaining how to start.
+- The project has a Python dependency manifest, preferably `pyproject.toml`.
+- The dependency manifest includes dev tooling needed to run verification, at
+  minimum `pytest`.
 - Generated files have a documented destination.
 - Temporary caches are separate from long-term outputs.
 
@@ -336,7 +340,153 @@ Acceptance criteria:
 - UI or API output links back to evidence.
 - Access control and audit logging are planned before multi-user use.
 
-## 19. Working Rules
+Initial analyst UI decision:
+
+- Build a map-first Azerbaijan energy intelligence dashboard before adding a
+  heavier multi-user web stack.
+- Use MapLibre GL JS with token-free vector tiles for the static demo artifact.
+- Keep the app Python-first by generating HTML from pipeline records.
+- Show ranked drillsite opportunities, environmental pressure zones, political
+  pressure zones, source coverage, and an evidence drawer linked to source URLs.
+- Treat Mapbox as an optional polish/vendor-service choice and CARTO as a later
+  spatial-analytics choice, not the default for the first demo.
+
+## 19. Milestone 15: Live UI Data Integration
+
+Transition the product UI from mock operational overlays to pipeline-backed
+records.
+
+Required behavior:
+
+- Load map inputs from a run-local `records/` directory.
+- Use `sources.jsonl` for source coverage.
+- Use `fetched_documents.jsonl` or `documents.jsonl` for citations.
+- Use `claims.jsonl` for evidence-backed map markers.
+- Use `trust_scores.jsonl` for confidence display.
+- Keep hardcoded drillsite and pressure overlays behind an explicit demo flag.
+
+Acceptance criteria:
+
+- The runner's `build_map_ui` stage passes its run records into the UI builder.
+- The UI renders claim markers from JSONL records without custom frontend code.
+- Claim detail panels show source URL, evidence excerpt, and trust confidence
+  when available.
+- Demo overlays are opt-in and are not required for a functional map artifact.
+- Tests cover JSONL record loading and generated HTML map payloads.
+
+## 20. Milestone 16: Automatic Crawl Orchestration
+
+Move from starter source data toward an automatically refreshed production
+pipeline.
+
+Required behavior:
+
+- Provide an `automatic_crawl` runner preset that expands to source validation,
+  discovery, access checks, fetching, extraction, cleaning, redaction, signal
+  extraction, trust scoring, and map UI generation.
+- Keep crawling bounded with `--max-sources`, `--max-items-per-source`,
+  `--max-fetches`, timeouts, robots checks, and source rate limits.
+- Treat `data/sources.csv` as a seed registry, not the whole production source
+  system.
+- Write every intermediate record to the run-local `records/` directory so the
+  UI can consume live outputs without custom frontend changes.
+
+Acceptance criteria:
+
+- A single command can run the full bounded crawl pipeline.
+- Fetch failures and extraction failures are recorded without corrupting the run.
+- The generated map reads claim and trust records from the same run directory.
+- Tests verify the full crawl-to-map path with injected network responses.
+- Future production work can replace manual seeds with sitemap, feed, API, or
+  approved-source discovery without changing UI contracts.
+
+## 21. Milestone 17: Approved Source Expansion
+
+Expand crawl targets from approved source-registry endpoints instead of relying
+only on one manually curated URL per source.
+
+Required behavior:
+
+- Read `sitemap_url`, `rss_url`, and `api_url` from source metadata.
+- Parse sitemap `<loc>` URLs.
+- Parse RSS and Atom link URLs.
+- Parse simple JSON API payloads with `url`, `link`, or `href` fields.
+- Keep manual source URLs as fallback seeds.
+- Keep expanded discovery bounded by `--max-items-per-source`.
+
+Acceptance criteria:
+
+- Expanded discovery can run without fetching discovered document content.
+- `automatic_crawl` includes expanded discovery by default.
+- Tests cover sitemap, feed, API, and runner integration with injected
+  responses.
+- Network or parse failures for discovery endpoints produce no expanded URLs
+  but do not fail the run.
+
+## 22. Milestone 18: Source Health And Frontier Management
+
+Prepare the crawler for repeat production runs.
+
+Status: implemented.
+
+Required behavior:
+
+- Track per-source fetch success, access denials, extraction failures, and claim
+  yield.
+- Identify stale, noisy, blocked, and high-value sources.
+- Maintain a crawl frontier that can prioritize fresh approved URLs over repeated
+  manual seeds.
+- Preserve run-level audit logs for source health decisions.
+
+Acceptance criteria:
+
+- A run summary can rank sources by health and yield.
+- Retry candidates are recorded separately from permanent skips.
+- The next run can avoid repeatedly fetching known-bad URLs.
+
+Implemented artifacts:
+
+- `records/source_health.jsonl`
+- `records/retry_candidates.jsonl`
+- `assess_source_health` stage in `automatic_crawl`
+- Tests for high-value sources, blocked/degraded sources, retryable candidates,
+  permanent skips, and runner integration.
+
+## 23. Milestone 19: Source Onboarding Workflow
+
+Add a controlled path for growing beyond the starter CSV.
+
+Required behavior:
+
+- Store proposed sources separately from approved sources.
+- Require analyst or operator approval before crawling a new domain.
+- Record access method, robots policy, rate limit, allowed paths, blocked paths,
+  source tier, and known limitations.
+
+Acceptance criteria:
+
+- Approved sources can be promoted into the active registry.
+- Rejected or pending sources are not crawled.
+- Every active source has access-control metadata.
+
+## 24. Milestone 20: API-Backed Production UI
+
+Move from static generated HTML toward a production app boundary.
+
+Required behavior:
+
+- Serve run records through a small API.
+- Keep the map JSON contract compatible with the static artifact.
+- Add filters for run, source, claim type, trust score, and freshness.
+- Plan authentication and audit logging before multi-user deployment.
+
+Acceptance criteria:
+
+- The UI can load map data without embedding all records in HTML.
+- Existing JSONL run artifacts remain exportable and auditable.
+- Static HTML generation remains available for offline reports.
+
+## 25. Working Rules
 
 - Prefer small changes with visible outputs.
 - Keep domain logic configurable.

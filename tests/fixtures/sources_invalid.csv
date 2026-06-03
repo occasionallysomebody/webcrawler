@@ -1,0 +1,3 @@
+source_id,name,tier,publisher_type,base_url,access_method,rate_limit_seconds,robots_required,enabled,notes
+broken,Broken Source,tier_1,multilateral,,sitemap,2,true,true,Missing base_url should fail.
+bad-bool,Bad Boolean Source,tier_1,multilateral,https://bad-bool.example,sitemap,2,maybe,true,Invalid robots_required should fail.

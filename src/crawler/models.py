@@ -74,6 +74,20 @@ class DiscoveredItem(SerializableRecord):
 
 
 @dataclass(slots=True)
+class AccessDecision(SerializableRecord):
+    item_id: str
+    source_id: str
+    url: str
+    allowed: bool
+    reason: str
+    checked_at: str
+    robots_required: bool = True
+    user_agent: str = ""
+    rate_limit_seconds: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class FetchedDocument(SerializableRecord):
     document_id: str
     source_id: str
@@ -115,6 +129,28 @@ class CleanDocument(SerializableRecord):
 
 
 @dataclass(slots=True)
+class RedactedDocument(SerializableRecord):
+    document_id: str
+    redacted_text: str
+    redaction_method: str
+    redaction_count: int
+    redaction_types: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class Entity(SerializableRecord):
+    entity_id: str
+    document_id: str
+    entity_type: str
+    entity_text: str
+    normalized_text: str
+    evidence_excerpt: str
+    confidence: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class Claim(SerializableRecord):
     claim_id: str
     document_id: str
@@ -137,4 +173,38 @@ class TrustScore(SerializableRecord):
     conflict_penalty: float | None = None
     final_score: float | None = None
     score_explanation: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SourceHealth(SerializableRecord):
+    source_id: str
+    run_id: str
+    status: str
+    health_score: float
+    items_discovered: int = 0
+    access_allowed: int = 0
+    access_denied: int = 0
+    documents_fetched: int = 0
+    fetch_successes: int = 0
+    fetch_failures: int = 0
+    extraction_successes: int = 0
+    extraction_failures: int = 0
+    claims_extracted: int = 0
+    claim_yield: float = 0.0
+    notes: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RetryCandidate(SerializableRecord):
+    candidate_id: str
+    source_id: str
+    url: str
+    reason: str
+    retryable: bool
+    priority: str
+    item_id: str | None = None
+    document_id: str | None = None
+    next_action: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
