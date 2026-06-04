@@ -1,5 +1,7 @@
 # Webcrawler
 
+**DISCLAIMER: THIS PROJECT WAS BUILT WITH CODEX**
+
 This repository hosts a small, auditable public-source crawling pipeline. The
 project is intentionally staged: start with local files and testable modules,
 then add more pipeline stages only after each earlier stage produces a verified
