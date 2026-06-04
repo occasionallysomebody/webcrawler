@@ -9,7 +9,7 @@ from crawler.map_ui import (
     render_map_html,
     write_map_ui,
 )
-from crawler.models import Claim, FetchedDocument, Source, TrustScore
+from crawler.models import Claim, ClaimReview, FetchedDocument, Source, TrustScore
 from crawler.storage import append_jsonl
 
 
@@ -73,12 +73,22 @@ def test_build_map_data_attaches_claim_evidence() -> None:
         confidence=0.7,
     )
     score = TrustScore("claim-1", final_score=0.812)
+    review = ClaimReview(
+        "review-1",
+        "run-1",
+        "claim-1",
+        "confirmed",
+        "analyst-a",
+        "2026-06-04T12:00:00+00:00",
+        notes="Source PDF supports the extracted claim.",
+    )
 
     data = build_map_data(
         sources=[source],
         claims=[claim],
         trust_scores=[score],
         documents=[document],
+        claim_reviews=[review],
     )
     claim_features = [
         feature
@@ -89,6 +99,11 @@ def test_build_map_data_attaches_claim_evidence() -> None:
     assert len(claim_features) == 1
     assert claim_features[0]["properties"]["confidence"] == 0.812
     assert claim_features[0]["properties"]["evidence"][0]["url"] == document.url
+    assert claim_features[0]["properties"]["review_status"] == "confirmed"
+    assert (
+        claim_features[0]["properties"]["review_notes"]
+        == "Source PDF supports the extracted claim."
+    )
 
 
 def test_render_map_html_embeds_maplibre_and_map_data() -> None:
@@ -170,6 +185,14 @@ def test_load_map_records_and_write_ui_from_records_dir() -> None:
         confidence=0.7,
     )
     score = TrustScore("claim-1", final_score=0.812)
+    review = ClaimReview(
+        "review-1",
+        "run-1",
+        "claim-1",
+        "watchlisted",
+        "analyst-a",
+        "2026-06-04T12:00:00+00:00",
+    )
 
     with TemporaryDirectory() as tmp_dir:
         records_dir = Path(tmp_dir) / "records"
@@ -177,6 +200,7 @@ def test_load_map_records_and_write_ui_from_records_dir() -> None:
         append_jsonl(records_dir / "fetched_documents.jsonl", [document])
         append_jsonl(records_dir / "claims.jsonl", [claim])
         append_jsonl(records_dir / "trust_scores.jsonl", [score])
+        append_jsonl(records_dir / "claim_reviews.jsonl", [review])
 
         records = load_map_records(records_dir)
         result = write_map_ui(
@@ -190,7 +214,9 @@ def test_load_map_records_and_write_ui_from_records_dir() -> None:
         data = json.loads(payload.split("</script>", 1)[0])
 
     assert len(records.claims) == 1
+    assert len(records.claim_reviews) == 1
     assert data["summary"]["claims"] == 1
+    assert data["summary"]["claim_reviews"] == 1
     assert '"run_id": "run-1"' in content
     assert data["summary"]["trust_scores"] == 1
     assert any(

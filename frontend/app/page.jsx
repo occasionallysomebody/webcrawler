@@ -45,6 +45,8 @@ export default function Home() {
   const [status, setStatus] = useState("Loading runs");
   const [error, setError] = useState("");
   const [exportStatus, setExportStatus] = useState("");
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [reviewStatus, setReviewStatus] = useState("");
 
   const features = mapData?.features?.features || [];
   const claims = useMemo(
@@ -95,6 +97,12 @@ export default function Home() {
     syncMapData(map, features);
     syncLayerVisibility(map, layerState);
   }, [features, layerState]);
+
+  useEffect(() => {
+    const props = selectedFeature?.properties || {};
+    setReviewNotes(props.review_notes || props.review?.notes || "");
+    setReviewStatus(props.review_status || "unreviewed");
+  }, [selectedFeature]);
 
   async function loadRuns() {
     try {
@@ -261,7 +269,13 @@ export default function Home() {
   async function exportEvidence() {
     if (!selectedRun || !selectedFeature) return;
     const claimId = selectedProps.claim_id;
-    const query = claimId ? `?claim_id=${encodeURIComponent(claimId)}` : "";
+    const sourceId = selectedProps.source_id;
+    const featureId = selectedProps.id;
+    const params = new URLSearchParams();
+    if (claimId) params.set("claim_id", claimId);
+    if (!claimId && sourceId) params.set("source_id", sourceId);
+    if (featureId) params.set("feature_id", featureId);
+    const query = params.toString() ? `?${params}` : "";
     try {
       setExportStatus("Exporting");
       const response = await apiFetch(
@@ -283,6 +297,42 @@ export default function Home() {
       setExportStatus("Exported");
     } catch (exportError) {
       setExportStatus(exportError.message);
+    }
+  }
+
+  async function saveReview(nextStatus) {
+    const claimId = selectedProps.claim_id;
+    if (!selectedRun || !claimId) return;
+    try {
+      setReviewStatus(nextStatus);
+      const response = await apiFetch(`/runs/${encodeURIComponent(selectedRun)}/claim-reviews`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          claim_id: claimId,
+          review_status: nextStatus,
+          notes: reviewNotes
+        })
+      });
+      if (!response.ok) throw new Error(`Review failed with ${response.status}`);
+      const payload = await response.json();
+      setSelectedFeature((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          properties: {
+            ...current.properties,
+            review_status: payload.review.review_status,
+            review: payload.review,
+            review_notes: payload.review.notes,
+            reviewed_at: payload.review.reviewed_at,
+            reviewer: payload.review.reviewer
+          }
+        };
+      });
+      await loadRunData(selectedRun);
+    } catch (reviewError) {
+      setExportStatus(reviewError.message);
     }
   }
 
@@ -406,12 +456,40 @@ export default function Home() {
               <>
                 <h3>{selectedProps.name}</h3>
                 <div className="tag-row">
-                  {[selectedProps.layer, selectedProps.status, selectedProps.agreement_status].filter(Boolean).map((tag) => (
+                  {[selectedProps.layer, selectedProps.status, selectedProps.agreement_status, selectedProps.review_status].filter(Boolean).map((tag) => (
                     <span key={tag}>{tag}</span>
                   ))}
                 </div>
                 <p className="detail-summary">{selectedProps.summary}</p>
                 <p className="muted">Confidence: {scoreText(selectedFeature) || "unscored"}</p>
+                {selectedProps.claim_id ? (
+                  <div className="review-box">
+                    <label className="field">
+                      <span>Analyst review notes</span>
+                      <textarea
+                        value={reviewNotes}
+                        onChange={(event) => setReviewNotes(event.target.value)}
+                        placeholder="Add a short human review note."
+                      />
+                    </label>
+                    <div className="review-actions">
+                      {["confirmed", "rejected", "needs_review", "watchlisted"].map((item) => (
+                        <button
+                          className={`review-button ${reviewStatus === item ? "active" : ""}`}
+                          key={item}
+                          onClick={() => saveReview(item)}
+                        >
+                          {item.replace("_", " ")}
+                        </button>
+                      ))}
+                    </div>
+                    {selectedProps.reviewed_at ? (
+                      <p className="muted">
+                        Last reviewed by {selectedProps.reviewer || "analyst"} at {selectedProps.reviewed_at}.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="detail-actions">
                   <button className="icon-button" onClick={exportEvidence}>
                     <Download size={16} />

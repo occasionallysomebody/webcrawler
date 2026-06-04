@@ -54,8 +54,10 @@ Pipeline Stages
    using paid external services.
 
 ``storage``
-   Writes JSONL and SQLite records. JSONL remains useful for local development
-   because each stage can be inspected with a text editor.
+   Writes JSONL records for local inspection and mirrors production runs into
+   SQLite when configured. SQLite stores run summaries, per-run records, review
+   status, audit events, and artifact manifests without requiring paid managed
+   storage.
 
 ``incremental``
    Loads previous run metadata, classifies current fetches as new, changed,
@@ -67,9 +69,15 @@ Pipeline Stages
    Next UI consume the same run artifacts instead of inventing separate mock
    data paths.
 
+``review``
+   Stores append-only human review decisions for extracted claims. Review notes
+   are separate from source evidence so original crawler records remain
+   immutable.
+
 ``config`` and ``audit``
    Define the deployment boundary. ``config`` reads environment-specific API
-   settings such as run storage paths, CORS origins, and bearer-token auth.
+   settings such as run storage paths, SQLite database paths, CORS origins, and
+   bearer-token auth.
    ``audit`` appends JSONL records for analyst actions such as run selection,
    evidence inspection, and evidence export.
 

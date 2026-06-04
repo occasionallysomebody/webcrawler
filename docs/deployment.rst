@@ -24,9 +24,13 @@ The API reads deployment settings from environment variables:
    ``outputs/audit/audit_events.jsonl``.
 
 ``CRAWLER_STORAGE_BACKEND``
-   Storage adapter label. Milestone 22 supports ``local_jsonl`` and
-   ``shared_filesystem``. Managed PostgreSQL and object storage adapters are
-   planned for the later production storage milestone.
+   Storage adapter label. Use ``local_jsonl`` for local development,
+   ``shared_filesystem`` for a mounted run folder, or ``sqlite`` for the
+   zero-cost durable storage adapter added in Milestone 27.
+
+``CRAWLER_RUN_DB_PATH``
+   SQLite database path used when ``CRAWLER_STORAGE_BACKEND=sqlite``. The
+   default is ``outputs/storage/webcrawler.sqlite``.
 
 ``CRAWLER_CORS_ORIGINS``
    Comma-separated exact browser origins allowed to call the API.
@@ -79,6 +83,36 @@ Audit events are appended as JSONL with this shape:
        "source_count": 1
      }
    }
+
+When ``CRAWLER_STORAGE_BACKEND=sqlite`` is enabled, the API still writes the
+JSONL audit log and also mirrors audit events into the SQLite ``audit_events``
+table.
+
+Production Storage
+------------------
+
+Milestone 27 keeps the project at a ``$0`` storage cost by using SQLite plus a
+configured filesystem path. The runner writes the normal JSONL run folder first,
+then mirrors run summaries, per-run records, review status, audit events, and
+artifact manifests into SQLite.
+
+Run a production-storage crawl locally:
+
+.. code-block:: powershell
+
+   python -m crawler.runner --run-id sqlite-demo --stages automatic_crawl --max-sources 3 --max-items-per-source 2 --max-fetches 3 --storage-backend sqlite --run-db-path outputs/storage/webcrawler.sqlite
+
+Serve the API from SQLite:
+
+.. code-block:: powershell
+
+   $env:CRAWLER_STORAGE_BACKEND='sqlite'
+   $env:CRAWLER_RUN_DB_PATH='outputs/storage/webcrawler.sqlite'
+   python -m uvicorn crawler.api:app --host 127.0.0.1 --port 8000
+
+Raw cache files, generated reports, logs, and static HTML exports remain
+filesystem artifacts. SQLite stores their manifest paths so the run stays
+auditable without storing large binary objects in the database.
 
 Frontend Deployment
 -------------------

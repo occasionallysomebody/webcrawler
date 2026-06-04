@@ -25,8 +25,24 @@ from crawler.config import (
     load_deployment_settings,
     validate_deployment_settings,
 )
-from crawler.map_ui import build_map_data, load_map_records, render_map_html
-from crawler.storage import read_jsonl
+from crawler.map_ui import MapUiRecords, build_map_data, load_map_records, render_map_html
+from crawler.models import Claim, ClaimReview, FetchedDocument, Source, TrustScore
+from crawler.review import (
+    append_claim_review,
+    create_claim_review,
+    latest_reviews_by_claim,
+    read_claim_reviews,
+    review_to_public_dict,
+)
+from crawler.storage import (
+    fetch_run_records,
+    fetch_run_summary,
+    initialize_sqlite,
+    list_run_summaries,
+    read_jsonl,
+    upsert_audit_event,
+    upsert_run_records,
+)
 
 
 RECORD_ALLOWLIST = {
@@ -41,6 +57,7 @@ RECORD_ALLOWLIST = {
     "claims": "claims.jsonl",
     "claim_clusters": "claim_clusters.jsonl",
     "trust_scores": "trust_scores.jsonl",
+    "claim_reviews": "claim_reviews.jsonl",
     "source_health": "source_health.jsonl",
     "retry_candidates": "retry_candidates.jsonl",
     "incremental_fetches": "incremental_fetches.jsonl",
@@ -125,6 +142,7 @@ def create_app(
                 "/runs/{run_id}/records/{record_name}",
                 "/runs/{run_id}/map-data",
                 "/runs/{run_id}/evidence-export",
+                "/runs/{run_id}/claim-reviews",
                 "/runs/{run_id}/map",
                 "/audit-events",
             ],
@@ -152,25 +170,17 @@ def create_app(
             dict[str, Any]: Run summaries safe for the analyst UI.
         """
 
-        runs = []
-        if root.exists():
-            for run_dir in sorted(root.iterdir()):
-                if not run_dir.is_dir():
-                    continue
-                summary_path = run_dir / "run_summary.json"
-                if not summary_path.exists():
-                    continue
-                summary = _read_json(summary_path)
-                runs.append(
-                    {
-                        "run_id": summary.get("run_id", run_dir.name),
-                        "status": summary.get("status"),
-                        "started_at": summary.get("started_at"),
-                        "finished_at": summary.get("finished_at"),
-                        "sources_loaded": summary.get("sources_loaded", 0),
-                        "claims_extracted": summary.get("claims_extracted", 0),
-                    }
-                )
+        runs = [
+            {
+                "run_id": summary.get("run_id"),
+                "status": summary.get("status"),
+                "started_at": summary.get("started_at"),
+                "finished_at": summary.get("finished_at"),
+                "sources_loaded": summary.get("sources_loaded", 0),
+                "claims_extracted": summary.get("claims_extracted", 0),
+            }
+            for summary in _list_run_summaries(active_settings, root)
+        ]
         return {"runs": runs}
 
     @app.get("/runs/{run_id}/summary")
@@ -189,7 +199,7 @@ def create_app(
             dict[str, Any]: Stored ``run_summary.json`` payload.
         """
 
-        return _read_json(_run_dir(root, run_id) / "run_summary.json")
+        return _run_summary_payload(active_settings, root, run_id)
 
     @app.get("/runs/{run_id}/records/{record_name}")
     def run_records(
@@ -219,10 +229,8 @@ def create_app(
                 status_code=404,
                 detail=f"unknown record type; allowed: {allowed}",
             )
-        records_path = _run_dir(root, run_id) / "records" / filename
-        if not records_path.exists():
-            return {"record_name": record_name, "records": []}
-        return {"record_name": record_name, "records": read_jsonl(records_path)}
+        records = _run_record_payloads(active_settings, root, run_id, record_name, filename)
+        return {"record_name": record_name, "records": records}
 
     @app.get("/runs/{run_id}/map-data")
     def map_data(
@@ -251,6 +259,7 @@ def create_app(
         """
 
         return _map_data_payload(
+            settings=active_settings,
             root=root,
             run_id=run_id,
             source_id=source_id,
@@ -259,12 +268,117 @@ def create_app(
             include_demo_overlays=include_demo_overlays,
         )
 
+    @app.get("/runs/{run_id}/claim-reviews")
+    def claim_reviews(
+        run_id: str,
+        auth: _AuthContext = Depends(auth_dependency),
+        claim_id: str | None = None,
+        latest_only: bool = True,
+    ) -> dict[str, Any]:
+        """Return analyst review decisions for one run.
+
+        Args:
+            run_id (str): Stable run identifier.
+            auth (_AuthContext): Authenticated request context supplied by the
+                API dependency.
+            claim_id (str | None): Optional claim filter.
+            latest_only (bool): Whether to return only the latest decision per
+                claim.
+
+        Returns:
+            dict[str, Any]: Review records separate from extracted claims.
+        """
+
+        reviews = _claim_reviews_for_run(active_settings, root, run_id)
+        if claim_id:
+            reviews = [review for review in reviews if review.claim_id == claim_id]
+        if latest_only:
+            reviews = list(latest_reviews_by_claim(reviews).values())
+        reviews.sort(key=lambda review: (review.claim_id, review.reviewed_at))
+        return {
+            "run_id": run_id,
+            "claim_id": claim_id,
+            "latest_only": latest_only,
+            "reviews": [review_to_public_dict(review) for review in reviews],
+        }
+
+    @app.post("/runs/{run_id}/claim-reviews")
+    def save_claim_review(
+        run_id: str,
+        payload: dict[str, Any],
+        request: Request,
+        auth: _AuthContext = Depends(auth_dependency),
+    ) -> dict[str, Any]:
+        """Append one analyst claim-review decision and audit the action.
+
+        Args:
+            run_id (str): Stable run identifier.
+            payload (dict[str, Any]): Review status, claim ID, and notes.
+            request (Request): FastAPI request used to capture route path.
+            auth (_AuthContext): Authenticated request context supplied by the
+                API dependency.
+
+        Returns:
+            dict[str, Any]: Saved review record and audit event ID.
+        """
+
+        records = _load_map_records(active_settings, root, run_id)
+        claim_id = _text_or_none(payload.get("claim_id"))
+        if claim_id is None:
+            raise HTTPException(status_code=422, detail="claim_id is required")
+        claim = next((item for item in records.claims if item.claim_id == claim_id), None)
+        if claim is None:
+            raise HTTPException(status_code=404, detail="claim not found")
+        document_by_id = {
+            document.document_id: document for document in records.documents
+        }
+        document = document_by_id.get(claim.document_id)
+        metadata = payload.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise HTTPException(status_code=422, detail="metadata must be an object")
+        try:
+            review = create_claim_review(
+                run_id=run_id,
+                claim_id=claim_id,
+                review_status=str(payload.get("review_status", "")),
+                reviewer=auth.actor,
+                notes=str(payload.get("notes", "")),
+                document_id=claim.document_id,
+                source_id=document.source_id if document else None,
+                metadata=metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        _store_claim_review(active_settings, root, run_id, review)
+        event = record_audit_event(
+            active_settings.audit_log_path,
+            event_type="claim_reviewed",
+            actor=auth.actor,
+            run_id=run_id,
+            claim_id=claim_id,
+            document_id=review.document_id,
+            source_id=review.source_id,
+            request_path=request.url.path,
+            metadata={
+                "review_id": review.review_id,
+                "review_status": review.review_status,
+                "notes_length": len(review.notes),
+            },
+        )
+        _store_audit_event(active_settings, event)
+        return {
+            "audit_event_id": event.event_id,
+            "review": review_to_public_dict(review),
+        }
+
     @app.get("/runs/{run_id}/evidence-export")
     def evidence_export(
         run_id: str,
         request: Request,
         auth: _AuthContext = Depends(auth_dependency),
         claim_id: str | None = None,
+        source_id: str | None = None,
+        feature_id: str | None = None,
     ) -> dict[str, Any]:
         """Return an evidence packet and record a server-side audit event.
 
@@ -274,25 +388,39 @@ def create_app(
             auth (_AuthContext): Authenticated request context supplied by the
                 API dependency.
             claim_id (str | None): Optional claim filter for the export packet.
+            source_id (str | None): Optional source filter for the export packet.
+            feature_id (str | None): Optional map feature filter for zone or
+                marker exports.
 
         Returns:
             dict[str, Any]: Evidence packet plus the audit event ID.
         """
 
-        packet = _evidence_export_payload(root=root, run_id=run_id, claim_id=claim_id)
+        packet = _evidence_export_payload(
+            settings=active_settings,
+            root=root,
+            run_id=run_id,
+            claim_id=claim_id,
+            source_id=source_id,
+            feature_id=feature_id,
+        )
         event = record_audit_event(
             active_settings.audit_log_path,
             event_type="evidence_exported",
             actor=auth.actor,
             run_id=run_id,
             claim_id=claim_id,
+            source_id=source_id,
             request_path=request.url.path,
             metadata={
                 "claim_count": len(packet["claims"]),
                 "document_count": len(packet["documents"]),
                 "source_count": len(packet["sources"]),
+                "map_feature_count": len(packet["map_features"]),
+                "feature_id": feature_id,
             },
         )
+        _store_audit_event(active_settings, event)
         return {"audit_event_id": event.event_id, **packet}
 
     @app.post("/audit-events")
@@ -332,6 +460,7 @@ def create_app(
                 request_path=request.url.path,
                 metadata=metadata,
             )
+            _store_audit_event(active_settings, event)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return {"event": event.to_dict()}
@@ -353,6 +482,7 @@ def create_app(
         """
 
         data = _map_data_payload(
+            settings=active_settings,
             root=root,
             run_id=run_id,
             source_id=None,
@@ -487,8 +617,198 @@ def _read_json(path: Path) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"invalid JSON: {path}") from error
 
 
+def _using_sqlite(settings: DeploymentSettings) -> bool:
+    """Return whether the API should read durable SQLite storage."""
+
+    return settings.storage_backend == "sqlite"
+
+
+def _list_run_summaries(
+    settings: DeploymentSettings,
+    root: Path,
+) -> list[dict[str, Any]]:
+    """List run summaries from the configured storage backend."""
+
+    if _using_sqlite(settings):
+        connection = initialize_sqlite(settings.run_db_path)
+        try:
+            return list_run_summaries(connection)
+        finally:
+            connection.close()
+    runs = []
+    if root.exists():
+        for run_dir in sorted(root.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            summary_path = run_dir / "run_summary.json"
+            if summary_path.exists():
+                runs.append(_read_json(summary_path))
+    return runs
+
+
+def _run_summary_payload(
+    settings: DeploymentSettings,
+    root: Path,
+    run_id: str,
+) -> dict[str, Any]:
+    """Fetch one run summary from the configured storage backend."""
+
+    if _using_sqlite(settings):
+        _validate_run_id(run_id)
+        connection = initialize_sqlite(settings.run_db_path)
+        try:
+            summary = fetch_run_summary(connection, run_id)
+        finally:
+            connection.close()
+        if summary is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return summary
+    return _read_json(_run_dir(root, run_id) / "run_summary.json")
+
+
+def _run_record_payloads(
+    settings: DeploymentSettings,
+    root: Path,
+    run_id: str,
+    record_name: str,
+    filename: str,
+) -> list[dict[str, Any]]:
+    """Fetch one run record set from the configured storage backend."""
+
+    if _using_sqlite(settings):
+        _validate_run_id(run_id)
+        connection = initialize_sqlite(settings.run_db_path)
+        try:
+            if fetch_run_summary(connection, run_id) is None:
+                raise HTTPException(status_code=404, detail="run not found")
+            return fetch_run_records(
+                connection,
+                run_id=run_id,
+                record_name=record_name,
+            )
+        finally:
+            connection.close()
+    records_path = _run_dir(root, run_id) / "records" / filename
+    if not records_path.exists():
+        return []
+    return read_jsonl(records_path)
+
+
+def _load_map_records(
+    settings: DeploymentSettings,
+    root: Path,
+    run_id: str,
+) -> MapUiRecords:
+    """Load map records from JSONL or SQLite storage."""
+
+    if not _using_sqlite(settings):
+        return load_map_records(_run_dir(root, run_id) / "records")
+    _validate_run_id(run_id)
+    connection = initialize_sqlite(settings.run_db_path)
+    try:
+        if fetch_run_summary(connection, run_id) is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return MapUiRecords(
+            sources=_records_as_models(
+                fetch_run_records(connection, run_id=run_id, record_name="sources"),
+                Source,
+            ),
+            claims=_records_as_models(
+                fetch_run_records(connection, run_id=run_id, record_name="claims"),
+                Claim,
+            ),
+            trust_scores=_records_as_models(
+                fetch_run_records(
+                    connection,
+                    run_id=run_id,
+                    record_name="trust_scores",
+                ),
+                TrustScore,
+            ),
+            documents=_records_as_models(
+                fetch_run_records(
+                    connection,
+                    run_id=run_id,
+                    record_name="fetched_documents",
+                ),
+                FetchedDocument,
+            ),
+            claim_reviews=_records_as_models(
+                fetch_run_records(
+                    connection,
+                    run_id=run_id,
+                    record_name="claim_reviews",
+                ),
+                ClaimReview,
+            ),
+        )
+    finally:
+        connection.close()
+
+
+def _records_as_models(records: list[dict[str, Any]], record_type):
+    """Convert stored payloads to dataclass records."""
+
+    return [record_type(**record) for record in records]
+
+
+def _claim_reviews_for_run(
+    settings: DeploymentSettings,
+    root: Path,
+    run_id: str,
+) -> list[ClaimReview]:
+    """Load claim reviews from the configured storage backend."""
+
+    if _using_sqlite(settings):
+        return _load_map_records(settings, root, run_id).claim_reviews
+    return read_claim_reviews(_run_dir(root, run_id) / "records" / "claim_reviews.jsonl")
+
+
+def _store_claim_review(
+    settings: DeploymentSettings,
+    root: Path,
+    run_id: str,
+    review: ClaimReview,
+) -> None:
+    """Persist one review in the configured storage backend."""
+
+    if _using_sqlite(settings):
+        connection = initialize_sqlite(settings.run_db_path)
+        try:
+            upsert_run_records(
+                connection,
+                run_id=run_id,
+                record_name="claim_reviews",
+                records=[review],
+            )
+        finally:
+            connection.close()
+        return
+    append_claim_review(_run_dir(root, run_id) / "records" / "claim_reviews.jsonl", review)
+
+
+def _store_audit_event(settings: DeploymentSettings, event) -> None:
+    """Mirror audit events into durable storage when SQLite mode is active."""
+
+    if not _using_sqlite(settings):
+        return
+    connection = initialize_sqlite(settings.run_db_path)
+    try:
+        upsert_audit_event(connection, event)
+    finally:
+        connection.close()
+
+
+def _validate_run_id(run_id: str) -> None:
+    """Reject unsafe run IDs before database lookup."""
+
+    if "/" in run_id or "\\" in run_id or run_id in {"", ".", ".."}:
+        raise HTTPException(status_code=404, detail="run not found")
+
+
 def _map_data_payload(
     *,
+    settings: DeploymentSettings,
     root: Path,
     run_id: str,
     source_id: str | None,
@@ -510,13 +830,13 @@ def _map_data_payload(
         dict[str, Any]: Map-data payload.
     """
 
-    records_dir = _run_dir(root, run_id) / "records"
-    records = load_map_records(records_dir)
-    sources, documents, claims, trust_scores = _filter_map_records(
+    records = _load_map_records(settings, root, run_id)
+    sources, documents, claims, trust_scores, claim_reviews = _filter_map_records(
         sources=records.sources,
         documents=records.documents,
         claims=records.claims,
         trust_scores=records.trust_scores,
+        claim_reviews=records.claim_reviews,
         source_id=source_id,
         claim_type=claim_type,
         min_trust=min_trust,
@@ -526,15 +846,19 @@ def _map_data_payload(
         documents=documents,
         claims=claims,
         trust_scores=trust_scores,
+        claim_reviews=claim_reviews,
         include_demo_overlays=include_demo_overlays,
     )
 
 
 def _evidence_export_payload(
     *,
+    settings: DeploymentSettings,
     root: Path,
     run_id: str,
     claim_id: str | None,
+    source_id: str | None,
+    feature_id: str | None,
 ) -> dict[str, Any]:
     """Build an analyst evidence export packet from run records.
 
@@ -542,6 +866,8 @@ def _evidence_export_payload(
         root (Path): Root directory containing run outputs.
         run_id (str): Stable run identifier.
         claim_id (str | None): Optional claim filter.
+        source_id (str | None): Optional source filter.
+        feature_id (str | None): Optional map feature filter.
 
     Returns:
         dict[str, Any]: JSON-safe evidence export packet.
@@ -550,12 +876,21 @@ def _evidence_export_payload(
         HTTPException: Raised when a requested claim does not exist.
     """
 
-    records = load_map_records(_run_dir(root, run_id) / "records")
+    records = _load_map_records(settings, root, run_id)
     claims = records.claims
     if claim_id is not None:
         claims = [claim for claim in claims if claim.claim_id == claim_id]
         if not claims:
             raise HTTPException(status_code=404, detail="claim not found")
+
+    documents_by_id = {document.document_id: document for document in records.documents}
+    if source_id is not None:
+        claims = [
+            claim
+            for claim in claims
+            if documents_by_id.get(claim.document_id) is not None
+            and documents_by_id[claim.document_id].source_id == source_id
+        ]
 
     claim_ids = {claim.claim_id for claim in claims}
     document_ids = {claim.document_id for claim in claims}
@@ -563,19 +898,77 @@ def _evidence_export_payload(
         document for document in records.documents if document.document_id in document_ids
     ]
     source_ids = {document.source_id for document in documents}
+    if source_id is not None:
+        source_ids.add(source_id)
     sources = [source for source in records.sources if source.source_id in source_ids]
     trust_scores = [
         score for score in records.trust_scores if score.claim_id in claim_ids
     ]
+    reviews = [
+        review for review in records.claim_reviews if review.claim_id in claim_ids
+    ]
+    latest_reviews = latest_reviews_by_claim(reviews)
+    map_data = build_map_data(
+        sources=records.sources,
+        documents=records.documents,
+        claims=records.claims,
+        trust_scores=records.trust_scores,
+        claim_reviews=records.claim_reviews,
+        include_demo_overlays=True,
+    )
+    map_features = map_data["features"]["features"]
+    if feature_id is not None:
+        map_features = [
+            feature
+            for feature in map_features
+            if feature.get("properties", {}).get("id") == feature_id
+        ]
+        if not map_features:
+            raise HTTPException(status_code=404, detail="map feature not found")
+        feature_claim_ids = {
+            str(feature.get("properties", {}).get("claim_id"))
+            for feature in map_features
+            if feature.get("properties", {}).get("claim_id")
+        }
+        if feature_claim_ids and claim_id is None:
+            claims = [claim for claim in records.claims if claim.claim_id in feature_claim_ids]
+            claim_ids = {claim.claim_id for claim in claims}
+            document_ids = {claim.document_id for claim in claims}
+            documents = [
+                document
+                for document in records.documents
+                if document.document_id in document_ids
+            ]
+            source_ids = {document.source_id for document in documents}
+            sources = [
+                source for source in records.sources if source.source_id in source_ids
+            ]
+            trust_scores = [
+                score for score in records.trust_scores if score.claim_id in claim_ids
+            ]
+            reviews = [
+                review
+                for review in records.claim_reviews
+                if review.claim_id in claim_ids
+            ]
+            latest_reviews = latest_reviews_by_claim(reviews)
 
     return {
         "run_id": run_id,
         "generated_at": datetime.now(UTC).isoformat(),
         "claim_filter": claim_id,
+        "source_filter": source_id,
+        "feature_filter": feature_id,
         "claims": [claim.to_dict() for claim in claims],
         "documents": [document.to_dict() for document in documents],
         "sources": [source.to_dict() for source in sources],
         "trust_scores": [score.to_dict() for score in trust_scores],
+        "review_notes": [
+            review_to_public_dict(review)
+            for review in latest_reviews.values()
+        ],
+        "review_history": [review_to_public_dict(review) for review in reviews],
+        "map_features": map_features,
     }
 
 
@@ -601,6 +994,7 @@ def _filter_map_records(
     documents,
     claims,
     trust_scores,
+    claim_reviews,
     source_id: str | None,
     claim_type: str | None,
     min_trust: float | None,
@@ -612,13 +1006,14 @@ def _filter_map_records(
         documents (Any): Document records.
         claims (Any): Claim records.
         trust_scores (Any): Trust score records.
+        claim_reviews (Any): Analyst review records.
         source_id (str | None): Optional source filter.
         claim_type (str | None): Optional claim-type filter.
         min_trust (float | None): Optional minimum final trust score.
 
     Returns:
-        tuple[Any, Any, Any, Any]: Filtered sources, documents, claims, and
-        trust scores.
+        tuple[Any, Any, Any, Any, Any]: Filtered sources, documents, claims,
+        trust scores, and claim reviews.
     """
 
     trust_by_claim = {score.claim_id: score for score in trust_scores}
@@ -641,6 +1036,9 @@ def _filter_map_records(
     claim_ids = {claim.claim_id for claim in filtered_claims}
     document_ids = {claim.document_id for claim in filtered_claims}
     filtered_trust = [score for score in trust_scores if score.claim_id in claim_ids]
+    filtered_reviews = [
+        review for review in claim_reviews if review.claim_id in claim_ids
+    ]
     filtered_documents = [
         document for document in documents if document.document_id in document_ids
     ]
@@ -651,7 +1049,13 @@ def _filter_map_records(
         filtered_sources = [
             source for source in sources if not source_ids or source.source_id in source_ids
         ]
-    return filtered_sources, filtered_documents, filtered_claims, filtered_trust
+    return (
+        filtered_sources,
+        filtered_documents,
+        filtered_claims,
+        filtered_trust,
+        filtered_reviews,
+    )
 
 
 app = create_app()

@@ -14,7 +14,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from crawler.models import Claim, FetchedDocument, Source, TrustScore
+from crawler.models import Claim, ClaimReview, FetchedDocument, Source, TrustScore
+from crawler.review import latest_reviews_by_claim, review_to_public_dict
 
 
 DEFAULT_CENTER = [49.45, 40.15]
@@ -41,6 +42,7 @@ class MapUiRecords:
     claims: list[Claim]
     trust_scores: list[TrustScore]
     documents: list[FetchedDocument]
+    claim_reviews: list[ClaimReview]
 
 
 def build_map_data(
@@ -49,6 +51,7 @@ def build_map_data(
     claims: list[Claim] | None = None,
     trust_scores: list[TrustScore] | None = None,
     documents: list[FetchedDocument] | None = None,
+    claim_reviews: list[ClaimReview] | None = None,
     include_demo_overlays: bool = False,
 ) -> dict[str, Any]:
     """Build map-ready operational intelligence from pipeline records."""
@@ -56,6 +59,7 @@ def build_map_data(
     claims = claims or []
     trust_scores = trust_scores or []
     documents = documents or []
+    claim_reviews = claim_reviews or []
     source_count_by_topic = _source_counts_by_topic(sources)
 
     features = []
@@ -64,7 +68,7 @@ def build_map_data(
         features.extend(_environmental_pressure_features(source_count_by_topic))
         features.extend(_political_pressure_features())
     features.extend(_source_coverage_features(sources, source_count_by_topic))
-    features.extend(_claim_features(claims, trust_scores, documents, sources))
+    features.extend(_claim_features(claims, trust_scores, documents, sources, claim_reviews))
     data_mode = "demo_plus_pipeline" if include_demo_overlays else "pipeline_records"
     summary = {
         "opportunities": sum(
@@ -83,6 +87,7 @@ def build_map_data(
         "claims": len(claims),
         "documents": len(documents),
         "trust_scores": len(trust_scores),
+        "claim_reviews": len(claim_reviews),
         "data_mode": data_mode,
     }
     return {
@@ -114,6 +119,11 @@ def load_map_records(records_dir: str | Path) -> MapUiRecords:
             ),
             *_records_from_jsonl(base / "documents.jsonl", FetchedDocument, "document_id"),
         ],
+        claim_reviews=_records_from_jsonl(
+            base / "claim_reviews.jsonl",
+            ClaimReview,
+            "review_id",
+        ),
     )
 
 
@@ -463,6 +473,7 @@ def write_map_ui(
     claims: list[Claim] | None = None,
     trust_scores: list[TrustScore] | None = None,
     documents: list[FetchedDocument] | None = None,
+    claim_reviews: list[ClaimReview] | None = None,
     include_demo_overlays: bool = False,
     api_base_url: str | None = None,
     run_id: str | None = None,
@@ -475,11 +486,13 @@ def write_map_ui(
         claims = records.claims or claims
         trust_scores = records.trust_scores or trust_scores
         documents = records.documents or documents
+        claim_reviews = records.claim_reviews or claim_reviews
     data = map_data or build_map_data(
         sources=sources,
         claims=claims,
         trust_scores=trust_scores,
         documents=documents,
+        claim_reviews=claim_reviews,
         include_demo_overlays=include_demo_overlays,
     )
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -517,7 +530,13 @@ def _json_for_script(data: dict[str, Any]) -> str:
 
 def _records_from_jsonl(
     path: Path,
-    record_type: type[Source] | type[Claim] | type[TrustScore] | type[FetchedDocument],
+    record_type: (
+        type[Source]
+        | type[Claim]
+        | type[TrustScore]
+        | type[FetchedDocument]
+        | type[ClaimReview]
+    ),
     id_field: str,
 ) -> list[Any]:
     """Support the module's public workflow by computing records from jsonl.
@@ -822,6 +841,7 @@ def _claim_features(
     trust_scores: list[TrustScore],
     documents: list[FetchedDocument],
     sources: list[Source],
+    claim_reviews: list[ClaimReview],
 ) -> list[dict[str, Any]]:
     """Support the module's public workflow by computing claim features.
     
@@ -837,11 +857,14 @@ def _claim_features(
             the current pipeline step.
         sources (list[Source]): Source registry entries available to the current
             pipeline step.
+        claim_reviews (list[ClaimReview]): Analyst decisions available for
+            extracted claims.
     
     Returns:
         list[dict[str, Any]]: Result produced for the next pipeline step or caller.
     """
     score_by_claim = {score.claim_id: score for score in trust_scores}
+    review_by_claim = latest_reviews_by_claim(claim_reviews)
     doc_by_id = {document.document_id: document for document in documents}
     source_by_id = {source.source_id: source for source in sources}
     positions = {
@@ -862,6 +885,8 @@ def _claim_features(
             "corroboration_summary",
             "No corroboration cluster is available for this claim.",
         )
+        review = review_by_claim.get(claim.claim_id)
+        review_payload = review_to_public_dict(review) if review else None
         features.append(
             _point(
                 f"claim-{index}-{claim.claim_id}",
@@ -874,6 +899,11 @@ def _claim_features(
                 source_id=document.source_id if document else None,
                 confidence=confidence or 0.4,
                 status="extracted",
+                review_status=review.review_status if review else "unreviewed",
+                review=review_payload,
+                review_notes=review.notes if review else "",
+                reviewed_at=review.reviewed_at if review else None,
+                reviewer=review.reviewer if review else None,
                 agreement_status=agreement_status,
                 agreement_summary=agreement_summary,
                 corroborating_source_count=claim.metadata.get(

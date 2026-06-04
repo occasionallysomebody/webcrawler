@@ -45,7 +45,13 @@ from crawler.source_health import (
     source_health_log_entry,
 )
 from crawler.source_registry import load_source_registry
-from crawler.storage import append_jsonl, storage_log_entry
+from crawler.storage import (
+    append_jsonl,
+    initialize_sqlite,
+    mirror_run_to_sqlite,
+    storage_log_entry,
+    upsert_run_summary,
+)
 from crawler.trust import score_claims, trust_log_entry
 
 
@@ -116,6 +122,8 @@ def run_pipeline(
     robots_text_provider: Callable[[Source, FetchPolicy], str | None] | None = None,
     map_api_base_url: str | None = None,
     previous_run_id: str | None = None,
+    storage_backend: str = "local_jsonl",
+    run_db_path: str | Path | None = None,
 ) -> RunResult:
     """Run a configured subset of local, network-free pipeline stages."""
     started_at = datetime.now(UTC).isoformat()
@@ -353,6 +361,9 @@ def run_pipeline(
         "started_at": run.started_at,
         "finished_at": run.finished_at,
         "status": run.status,
+        "output_dir": str(output_dir),
+        "storage_backend": storage_backend,
+        "run_db_path": str(run_db_path) if run_db_path is not None else None,
         "enabled_stages": run.enabled_stages,
         "sources_loaded": len(sources),
         "items_discovered": len(items),
@@ -395,6 +406,19 @@ def run_pipeline(
         encoding="utf-8",
     )
     append_jsonl(records_dir / "crawl_run.jsonl", [run])
+    if storage_backend == "sqlite":
+        db_path = Path(run_db_path or "outputs/storage/webcrawler.sqlite")
+        mirror_result = mirror_run_to_sqlite(db_path=db_path, run_dir=output_dir)
+        summary["durable_storage"] = mirror_result
+        (output_dir / "run_summary.json").write_text(
+            json.dumps(summary, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        connection = initialize_sqlite(db_path)
+        try:
+            upsert_run_summary(connection, summary)
+        finally:
+            connection.close()
     return RunResult(run=run, summary=summary, output_dir=output_dir)
 
 
@@ -439,6 +463,17 @@ def main(argv: list[str] | None = None) -> int:
         "--previous-run-id",
         help="Previous run ID for incremental or scheduled crawls.",
     )
+    parser.add_argument(
+        "--storage-backend",
+        default="local_jsonl",
+        choices=["local_jsonl", "shared_filesystem", "sqlite"],
+        help="Storage adapter for run records.",
+    )
+    parser.add_argument(
+        "--run-db-path",
+        default="outputs/storage/webcrawler.sqlite",
+        help="SQLite database path used when --storage-backend sqlite is set.",
+    )
     args = parser.parse_args(argv)
 
     result = run_pipeline(
@@ -455,6 +490,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
         map_api_base_url=args.map_api_base_url,
         previous_run_id=args.previous_run_id,
+        storage_backend=args.storage_backend,
+        run_db_path=args.run_db_path,
     )
     print(result.output_dir)
     print(result.summary["status"])

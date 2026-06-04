@@ -17,7 +17,7 @@ DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 )
-SUPPORTED_STORAGE_BACKENDS = {"local_jsonl", "shared_filesystem"}
+SUPPORTED_STORAGE_BACKENDS = {"local_jsonl", "shared_filesystem", "sqlite"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +32,10 @@ class DeploymentSettings:
         audit_log_path (Path): JSONL file where analyst audit events are
             appended.
         storage_backend (str): Name of the storage adapter. Milestone 22
-            supports local JSONL and shared filesystem paths.
+            supports local JSONL and shared filesystem paths; Milestone 27 adds
+            SQLite-backed production metadata and record storage.
+        run_db_path (Path): SQLite database used when
+            ``storage_backend='sqlite'``.
         cors_origins (tuple[str, ...]): Exact browser origins allowed to call
             the FastAPI service.
         cors_origin_regex (str | None): Optional regex for controlled preview
@@ -47,6 +50,7 @@ class DeploymentSettings:
     run_storage_path: Path = Path("outputs/runs")
     audit_log_path: Path = Path("outputs/audit/audit_events.jsonl")
     storage_backend: str = "local_jsonl"
+    run_db_path: Path = Path("outputs/storage/webcrawler.sqlite")
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
     cors_origin_regex: str | None = None
     api_token: str | None = None
@@ -65,6 +69,7 @@ class DeploymentSettings:
             "run_storage_path": str(self.run_storage_path),
             "audit_log_path": str(self.audit_log_path),
             "storage_backend": self.storage_backend,
+            "run_db_path": str(self.run_db_path),
             "cors_origins": list(self.cors_origins),
             "cors_origin_regex": self.cors_origin_regex,
             "auth_required": self.auth_required,
@@ -99,6 +104,9 @@ def load_deployment_settings(environ: dict[str, str] | None = None) -> Deploymen
         ),
         storage_backend=values.get("CRAWLER_STORAGE_BACKEND", "local_jsonl").strip()
         or "local_jsonl",
+        run_db_path=Path(
+            values.get("CRAWLER_RUN_DB_PATH", "outputs/storage/webcrawler.sqlite"),
+        ),
         cors_origins=_csv_values(
             values.get("CRAWLER_CORS_ORIGINS"),
             default=DEFAULT_CORS_ORIGINS,

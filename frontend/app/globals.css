@@ -164,16 +164,24 @@ input {
 }
 
 .field select,
-.field input[type="range"] {
+.field input[type="range"],
+.field textarea {
   width: 100%;
 }
 
-.field select {
+.field select,
+.field textarea {
   min-height: 38px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: white;
   padding: 0 10px;
+}
+
+.field textarea {
+  min-height: 86px;
+  padding: 9px 10px;
+  resize: vertical;
 }
 
 .toggle {
@@ -321,6 +329,38 @@ input {
 .detail-summary {
   font-size: 16px;
   line-height: 1.45;
+}
+
+.review-box {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fbfbfa;
+  padding: 12px;
+}
+
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-button {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 0 10px;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.review-button.active {
+  border-color: var(--green);
+  background: #eef8f4;
+  color: var(--green);
 }
 
 .detail-actions {

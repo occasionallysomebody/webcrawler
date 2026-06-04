@@ -14,7 +14,7 @@ artifact.
 | How do you run the project? | Install the project once, run one crawler command to create real records, start the API, then start the web dashboard. | In VS Code, open a terminal, run `cd C:\repos\webcrawler`, run `python -m pip install -e ".[dev]"`, run `python -m crawler.runner --run-id demo-client --stages automatic_crawl --max-sources 3 --max-items-per-source 2 --max-fetches 3`, run `python -m uvicorn crawler.api:app --host 127.0.0.1 --port 8000`, open a second terminal, run `cd C:\repos\webcrawler\frontend`, run `npm.cmd install`, run `npm.cmd run dev`, and open `http://127.0.0.1:3000`. |
 | What technologies are used and why? | Python runs the crawler, FastAPI serves the records, Next.js builds the dashboard, MapLibre shows map data, JSONL keeps evidence auditable, SQLite supports local querying, Trafilatura extracts HTML, and PyMuPDF extracts PDFs. | This stack keeps the prototype inspectable, testable, and usable at `$0` locally before any paid hosting decision is made. |
 | What is this project, and what is it not? | It is a proof-of-concept public-source intelligence pipeline, not a fully hosted commercial SaaS, not a private-data scraper, not a paywall bypass tool, and not a replacement for analyst or legal review. | The scope is approved public sources, real crawled records, transparent evidence, and functional dashboard controls, while always-on hosting and enterprise compliance remain out of scope for the local demo. |
-| What "production level" is this crawler? | It is a strong local prototype with production-shaped boundaries, but it is not yet a full production crawler. | It already has auth, audit logs, scheduled incremental crawls, extraction, trust scoring, corroboration checks, and a dashboard, but still needs durable production storage, analyst review workflow, observability, browser smoke tests, and deployment hardening. |
+| What "production level" is this crawler? | It is a strong local prototype with production-shaped boundaries, but it is not yet a full production crawler. | It already has auth, audit logs, scheduled incremental crawls, extraction, trust scoring, corroboration checks, analyst review workflow, SQLite-backed durable storage, and a dashboard, but still needs observability, browser smoke tests, and deployment hardening. |
 | What resources would it take to build a production-level crawler? | A production version would need hosted compute, durable database storage, object storage, monitoring, backups, secure deployment, source review, and ongoing maintenance. | With the current `$0` preference, use local demos or free tiers; a serious always-on client deployment would usually require owned hardware or paid hosting plus at least one engineer and one analyst/compliance reviewer. |
 
 ## Client Demo Checklist
@@ -93,6 +93,12 @@ registry/access/discovery/fetching layers in place.
   comparison and unchanged-document skipping.
 - Milestone 25: corroboration and contradiction detection are implemented with
   local deterministic claim clusters.
+- Milestone 26: analyst review workflow is implemented with append-only claim
+  review records, review-status API fields, UI review controls, evidence
+  exports, and audit events.
+- Milestone 27: production storage is implemented with a zero-cost SQLite
+  adapter for run metadata, records, review status, audit events, and artifact
+  manifests while preserving local JSONL run folders.
 
 ## Repository Layout
 

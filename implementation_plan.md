@@ -773,7 +773,7 @@ Next production direction:
 Add human review so the system supports due-diligence workflows instead of only
 automated summaries.
 
-Status: not started.
+Status: complete.
 
 Required behavior:
 
@@ -791,11 +791,29 @@ Acceptance criteria:
   and review notes.
 - Audit records can reconstruct who reviewed or exported evidence.
 
+Implementation notes:
+
+- `ClaimReview` records are appended to `records/claim_reviews.jsonl` and never
+  overwrite immutable extracted claim records.
+- FastAPI exposes `GET/POST /runs/{run_id}/claim-reviews`, includes latest
+  review status in map-data claim features, and records `claim_reviewed` audit
+  events.
+- Evidence export packets can be filtered by claim, source, or map feature and
+  include citations, retrieval metadata, trust fields, review notes, review
+  history, and selected map features.
+- The Next.js evidence drawer lets analysts add notes and mark claims as
+  `confirmed`, `rejected`, `needs_review`, or `watchlisted`.
+
+Zero-cost implementation note:
+
+- Review storage remains local JSONL for now; durable database storage is left
+  for Milestone 27 so this milestone does not introduce paid infrastructure.
+
 ## 31. Milestone 27: Production Storage Implementation
 
 Implement shared run storage after the storage boundary is defined.
 
-Status: not started.
+Status: complete.
 
 Required behavior:
 
@@ -818,6 +836,23 @@ Acceptance criteria:
 Debt addressed:
 
 - TD-004.
+
+Implementation notes:
+
+- `CRAWLER_STORAGE_BACKEND=sqlite` enables a zero-cost durable storage adapter
+  backed by `CRAWLER_RUN_DB_PATH`.
+- Runner output remains JSONL-first for inspection, then mirrors run summaries,
+  per-run records, artifact manifests, and audit events into SQLite.
+- FastAPI can list runs, serve summaries, serve record sets, build map data,
+  persist review records, and mirror audit events from SQLite storage.
+- Raw cache, reports, static UI exports, and logs remain filesystem artifacts
+  registered in the SQLite artifact manifest.
+
+Zero-cost implementation note:
+
+- SQLite plus a configured filesystem path is the production-storage step for
+  this project scale; managed PostgreSQL and object storage remain optional
+  future upgrades, not required spending.
 
 ## 32. Milestone 28: Observability And Source Operations
 

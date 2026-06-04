@@ -609,6 +609,40 @@ class AuditEvent(SerializableRecord):
 
 
 @dataclass(slots=True)
+class ClaimReview(SerializableRecord):
+    """Represent a human analyst decision for one extracted claim.
+
+    Review records are append-only and live beside crawler records instead of
+    replacing them. That keeps the original extracted claim immutable while
+    allowing due-diligence reviewers to add status and notes over time.
+
+    Attributes:
+        review_id (str): Stable identifier for this review event.
+        run_id (str): Run containing the reviewed claim.
+        claim_id (str): Claim receiving the human review decision.
+        review_status (str): One of ``confirmed``, ``rejected``,
+            ``needs_review``, or ``watchlisted``.
+        reviewer (str): Analyst or service account that made the decision.
+        reviewed_at (str): ISO-8601 timestamp for the decision.
+        notes (str): Analyst notes stored separately from extracted evidence.
+        source_id (str | None): Source related to the claim, when available.
+        document_id (str | None): Document related to the claim, when available.
+        metadata (dict[str, Any]): Small safe details such as prior status.
+    """
+
+    review_id: str
+    run_id: str
+    claim_id: str
+    review_status: str
+    reviewer: str
+    reviewed_at: str
+    notes: str = ""
+    source_id: str | None = None
+    document_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class IncrementalFetch(SerializableRecord):
     """Represent how one fetched URL changed compared with a previous run.
 

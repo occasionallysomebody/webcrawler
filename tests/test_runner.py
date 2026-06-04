@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 from urllib.error import HTTPError
 
 from crawler.runner import main, run_pipeline
-from crawler.storage import read_jsonl
+from crawler.storage import fetch_run_summary, initialize_sqlite, read_jsonl
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -98,6 +98,25 @@ def test_runner_main_returns_success() -> None:
         )
 
     assert exit_code == 0
+
+
+def test_runner_can_mirror_run_to_sqlite_storage() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "storage" / "crawler.sqlite"
+        result = run_pipeline(
+            source_registry_path=FIXTURES / "sources_valid.csv",
+            output_root=Path(tmp_dir) / "runs",
+            run_id="sqlite-run",
+            storage_backend="sqlite",
+            run_db_path=db_path,
+        )
+        connection = initialize_sqlite(db_path)
+        summary = fetch_run_summary(connection, "sqlite-run")
+        connection.close()
+
+    assert result.summary["status"] == "success"
+    assert result.summary["durable_storage"]["record_count"] >= 1
+    assert summary["run_id"] == "sqlite-run"
 
 
 def test_run_pipeline_can_build_map_ui() -> None:
