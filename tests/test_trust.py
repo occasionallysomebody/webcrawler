@@ -1,4 +1,4 @@
-from crawler.models import Claim, Source
+from crawler.models import Claim, ClaimCluster, Source
 from crawler.trust import (
     conflict_penalty,
     freshness_score,
@@ -105,3 +105,29 @@ def test_score_claims_and_log_entries() -> None:
     assert scores[1].source_tier_score == 0.3
     assert trust_log_entry(scores[0])["stage"] == "score_trust"
     assert conflict_penalty([claim("a"), claim("b"), claim("c"), claim("d")]) == 0.5
+
+
+def test_score_claims_uses_corroboration_clusters() -> None:
+    claims = [claim("claim-a"), claim("claim-b")]
+    cluster = ClaimCluster(
+        cluster_id="cluster-1",
+        claim_type="environmental_risk",
+        status="corroborated",
+        claim_ids=["claim-a", "claim-b"],
+        source_ids=["src-a", "src-b"],
+        corroborating_source_count=2,
+        independent_publisher_count=2,
+    )
+
+    scores = score_claims(
+        claims,
+        sources_by_claim_id={
+            "claim-a": source("src-a", "tier_2", "government"),
+            "claim-b": source("src-b", "tier_3", "ngo"),
+        },
+        claim_clusters=[cluster],
+    )
+
+    assert scores[0].corroboration_score == 0.5
+    assert scores[0].independence_score == 0.65
+    assert scores[0].metadata["corroboration_status"] == "corroborated"

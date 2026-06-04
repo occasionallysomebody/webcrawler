@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.error import HTTPError
 
 from crawler.runner import main, run_pipeline
 from crawler.storage import read_jsonl
@@ -39,9 +40,14 @@ class FakeResponse:
 class FakeOpener:
     def __init__(self, *responses: FakeResponse) -> None:
         self.responses = list(responses)
+        self.requests = []
 
     def open(self, request, timeout):
-        return self.responses.pop(0)
+        self.requests.append(request)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def test_run_pipeline_writes_summary_logs_and_records() -> None:
@@ -191,3 +197,150 @@ def test_run_pipeline_expands_approved_sitemap_discovery() -> None:
         "sitemap",
         "sitemap",
     ]
+
+
+def test_scheduled_crawl_skips_unchanged_documents_downstream() -> None:
+    csv_content = _single_source_csv()
+    body = (
+        b"<html><head><title>Alpha</title></head><body><main>"
+        b"<p>Global Witness reported gas flaring pollution in Azerbaijan near "
+        b"Sangachal terminal in 2025.</p>"
+        b"</main></body></html>"
+    )
+
+    with TemporaryDirectory() as tmp_dir:
+        registry_path = Path(tmp_dir) / "sources.csv"
+        registry_path.write_text(csv_content, encoding="utf-8")
+        first = run_pipeline(
+            source_registry_path=registry_path,
+            output_root=tmp_dir,
+            run_id="first-run",
+            enabled_stages=["automatic_crawl"],
+            max_fetches=1,
+            opener=FakeOpener(
+                FakeResponse(body, headers={"Content-Type": "text/html", "ETag": "v1"})
+            ),
+        )
+        opener = FakeOpener(
+            FakeResponse(body, headers={"Content-Type": "text/html", "ETag": "v1"})
+        )
+        second = run_pipeline(
+            source_registry_path=registry_path,
+            output_root=tmp_dir,
+            run_id="second-run",
+            enabled_stages=["scheduled_crawl"],
+            max_fetches=1,
+            opener=opener,
+            previous_run_id="first-run",
+        )
+        incremental = read_jsonl(second.output_dir / "records" / "incremental_fetches.jsonl")
+        extracted = read_jsonl(second.output_dir / "records" / "extracted_documents.jsonl")
+        claims = read_jsonl(second.output_dir / "records" / "claims.jsonl")
+
+    assert first.summary["claims_extracted"] == 1
+    assert second.summary["previous_run_id"] == "first-run"
+    assert second.summary["incremental_summary"]["unchanged"] == 1
+    assert incremental[0]["status"] == "unchanged"
+    assert extracted == []
+    assert claims == []
+    assert opener.requests[0].headers["If-none-match"] == "v1"
+
+
+def test_scheduled_crawl_processes_changed_documents() -> None:
+    csv_content = _single_source_csv()
+    first_body = (
+        b"<html><body><main><p>Global Witness reported gas flaring pollution "
+        b"in Azerbaijan in 2025.</p></main></body></html>"
+    )
+    changed_body = (
+        b"<html><body><main><p>Global Witness reported gas flaring pollution "
+        b"in Azerbaijan in 2026 with updated evidence near Sangachal terminal.</p>"
+        b"</main></body></html>"
+    )
+
+    with TemporaryDirectory() as tmp_dir:
+        registry_path = Path(tmp_dir) / "sources.csv"
+        registry_path.write_text(csv_content, encoding="utf-8")
+        run_pipeline(
+            source_registry_path=registry_path,
+            output_root=tmp_dir,
+            run_id="first-run",
+            enabled_stages=["automatic_crawl"],
+            max_fetches=1,
+            opener=FakeOpener(FakeResponse(first_body)),
+        )
+        second = run_pipeline(
+            source_registry_path=registry_path,
+            output_root=tmp_dir,
+            run_id="second-run",
+            enabled_stages=["incremental_crawl"],
+            max_fetches=1,
+            opener=FakeOpener(FakeResponse(changed_body)),
+            previous_run_id="first-run",
+        )
+        incremental = read_jsonl(second.output_dir / "records" / "incremental_fetches.jsonl")
+        extracted = read_jsonl(second.output_dir / "records" / "extracted_documents.jsonl")
+
+    assert second.summary["incremental_summary"]["changed"] == 1
+    assert incremental[0]["status"] == "changed"
+    assert incremental[0]["previous_document_id"] == incremental[0]["document_id"]
+    assert len(extracted) == 1
+    assert "2026 with updated evidence" in extracted[0]["extracted_text"]
+
+
+def test_scheduled_crawl_records_not_modified_responses() -> None:
+    csv_content = _single_source_csv()
+    body = (
+        b"<html><body><main><p>Global Witness reported gas flaring pollution "
+        b"in Azerbaijan in 2025.</p></main></body></html>"
+    )
+
+    with TemporaryDirectory() as tmp_dir:
+        registry_path = Path(tmp_dir) / "sources.csv"
+        registry_path.write_text(csv_content, encoding="utf-8")
+        run_pipeline(
+            source_registry_path=registry_path,
+            output_root=tmp_dir,
+            run_id="first-run",
+            enabled_stages=["automatic_crawl"],
+            max_fetches=1,
+            opener=FakeOpener(
+                FakeResponse(body, headers={"Content-Type": "text/html", "ETag": "v1"})
+            ),
+        )
+        not_modified = HTTPError(
+            url="https://alpha.example/report",
+            code=304,
+            msg="Not Modified",
+            hdrs={"ETag": "v1"},
+            fp=None,
+        )
+        second = run_pipeline(
+            source_registry_path=registry_path,
+            output_root=tmp_dir,
+            run_id="second-run",
+            enabled_stages=["scheduled_crawl"],
+            max_fetches=1,
+            opener=FakeOpener(not_modified),
+            previous_run_id="first-run",
+        )
+        fetched = read_jsonl(second.output_dir / "records" / "fetched_documents.jsonl")
+        incremental = read_jsonl(second.output_dir / "records" / "incremental_fetches.jsonl")
+
+    assert fetched[0]["status_code"] == 304
+    assert incremental[0]["status"] == "unchanged"
+    assert second.summary["documents_extracted"] == 0
+
+
+def _single_source_csv() -> str:
+    return "\n".join(
+        [
+            "source_id,name,tier,publisher_type,base_url,access_method,"
+            "rate_limit_seconds,robots_required,enabled,notes,sitemap_url,rss_url,"
+            "api_url,allowed_paths,blocked_paths,language,country,domain_tags,"
+            "known_bias_or_limitation",
+            "alpha,Alpha Source,tier_1,multilateral,https://alpha.example/report,"
+            "public_html,0,false,true,gas flaring source,,,,,,en,Azerbaijan,"
+            "gas_flaring|ecology,fixture only",
+        ]
+    )

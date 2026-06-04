@@ -1,4 +1,9 @@
-"""Targeted fetching for access-approved discovered items."""
+"""Polite fetching for approved and access-checked crawl items.
+
+Fetching is the point where the pipeline touches external public sources. This
+module records headers, status, checksums, cache paths, and errors so every later
+claim can be traced back to exactly what was retrieved and when.
+"""
 
 from __future__ import annotations
 
@@ -176,6 +181,31 @@ def _document_from_response(
     previous_document: FetchedDocument | None,
     cache_raw: bool,
 ) -> FetchedDocument:
+    """Support the module's public workflow by computing document from response.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        item (DiscoveredItem): Single discovered URL or document candidate being
+            processed.
+        response (Any): Value named ``response`` supplied by the caller for this
+            pipeline step.
+        body (bytes): Value named ``body`` supplied by the caller for this pipeline
+            step.
+        cache_dir (str | Path): Value named ``cache_dir`` supplied by the caller for
+            this pipeline step.
+        retrieved_at (str): Value named ``retrieved_at`` supplied by the caller for this
+            pipeline step.
+        previous_document (FetchedDocument | None): Value named ``previous_document``
+            supplied by the caller for this pipeline step.
+        cache_raw (bool): Value named ``cache_raw`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        FetchedDocument: Result produced for the next pipeline step or caller.
+    """
     checksum = checksum_bytes(body)
     headers = getattr(response, "headers", {})
     content_type = _header_value(headers, "Content-Type")
@@ -235,6 +265,25 @@ def _not_modified_document(
     retrieved_at: str,
     metadata: dict[str, object],
 ) -> FetchedDocument:
+    """Support the module's public workflow by computing not modified document.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        item (DiscoveredItem): Single discovered URL or document candidate being
+            processed.
+        previous_document (FetchedDocument): Value named ``previous_document`` supplied
+            by the caller for this pipeline step.
+        retrieved_at (str): Value named ``retrieved_at`` supplied by the caller for this
+            pipeline step.
+        metadata (dict[str, object]): Value named ``metadata`` supplied by the caller
+            for this pipeline step.
+    
+    Returns:
+        FetchedDocument: Result produced for the next pipeline step or caller.
+    """
     return _document(
         item,
         final_url=previous_document.final_url,
@@ -260,6 +309,35 @@ def _document(
     fetch_error: str | None = None,
     metadata: dict[str, object] | None = None,
 ) -> FetchedDocument:
+    """Support the module's public workflow by computing document.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        item (DiscoveredItem): Single discovered URL or document candidate being
+            processed.
+        final_url (str | None): Value named ``final_url`` supplied by the caller for
+            this pipeline step.
+        status_code (int | None): Value named ``status_code`` supplied by the caller for
+            this pipeline step.
+        content_type (str | None): HTTP content type used to choose an extraction or
+            cache strategy.
+        retrieved_at (str | None): Value named ``retrieved_at`` supplied by the caller
+            for this pipeline step.
+        checksum (str | None): Value named ``checksum`` supplied by the caller for this
+            pipeline step.
+        raw_cache_path (str | None): Value named ``raw_cache_path`` supplied by the
+            caller for this pipeline step.
+        fetch_error (str | None): Value named ``fetch_error`` supplied by the caller for
+            this pipeline step.
+        metadata (dict[str, object] | None): Value named ``metadata`` supplied by the
+            caller for this pipeline step.
+    
+    Returns:
+        FetchedDocument: Result produced for the next pipeline step or caller.
+    """
     return FetchedDocument(
         document_id=document_id(item.source_id, item.url),
         source_id=item.source_id,
@@ -280,6 +358,22 @@ def _request(
     policy: FetchPolicy,
     previous_document: FetchedDocument | None,
 ) -> Request:
+    """Support the module's public workflow by computing request.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        url (str): Public URL being normalized, checked, fetched, or cited.
+        policy (FetchPolicy): Fetch policy containing user-agent, timeout, retry, and
+            rate-limit settings.
+        previous_document (FetchedDocument | None): Value named ``previous_document``
+            supplied by the caller for this pipeline step.
+    
+    Returns:
+        Request: Result produced for the next pipeline step or caller.
+    """
     headers = make_headers(policy)
     if previous_document is not None:
         etag = previous_document.metadata.get("etag")
@@ -298,6 +392,26 @@ def _write_raw_cache(
     content_type: str | None,
     url: str,
 ) -> Path:
+    """Support the module's public workflow by computing write raw cache.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        cache_dir (str | Path): Value named ``cache_dir`` supplied by the caller for
+            this pipeline step.
+        doc_id (str): Value named ``doc_id`` supplied by the caller for this pipeline
+            step.
+        body (bytes): Value named ``body`` supplied by the caller for this pipeline
+            step.
+        content_type (str | None): HTTP content type used to choose an extraction or
+            cache strategy.
+        url (str): Public URL being normalized, checked, fetched, or cited.
+    
+    Returns:
+        Path: Resolved path to the file or directory created by the helper.
+    """
     target_dir = Path(cache_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{doc_id}{_extension(content_type, url)}"
@@ -306,6 +420,20 @@ def _write_raw_cache(
 
 
 def _extension(content_type: str | None, url: str) -> str:
+    """Support the module's public workflow by computing extension.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        content_type (str | None): HTTP content type used to choose an extraction or
+            cache strategy.
+        url (str): Public URL being normalized, checked, fetched, or cited.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     lowered_type = (content_type or "").split(";", 1)[0].strip().lower()
     if lowered_type == "text/html":
         return ".html"
@@ -320,6 +448,18 @@ def _extension(content_type: str | None, url: str) -> str:
 
 
 def _response_metadata(headers: Any) -> dict[str, object]:
+    """Support the module's public workflow by computing response metadata.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        headers (Any): HTTP header mapping returned by a server or sent with a request.
+    
+    Returns:
+        dict[str, object]: Structured log entry suitable for JSONL audit logs.
+    """
     metadata: dict[str, object] = {}
     for metadata_key, header_name in (
         ("etag", "ETag"),
@@ -333,6 +473,19 @@ def _response_metadata(headers: Any) -> dict[str, object]:
 
 
 def _header_value(headers: Any, name: str) -> str | None:
+    """Support the module's public workflow by computing header value.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        headers (Any): HTTP header mapping returned by a server or sent with a request.
+        name (str): Value named ``name`` supplied by the caller for this pipeline step.
+    
+    Returns:
+        str | None: Result produced for the next pipeline step or caller.
+    """
     getter = getattr(headers, "get", None)
     if callable(getter):
         value = getter(name)
@@ -347,6 +500,25 @@ def _validate_item_decision(
     item: DiscoveredItem,
     decision: AccessDecision,
 ) -> None:
+    """Support the module's public workflow by computing validate item decision.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        item (DiscoveredItem): Single discovered URL or document candidate being
+            processed.
+        decision (AccessDecision): Access decision that records whether a URL may be
+            fetched.
+    
+    Returns:
+        None: This function is used for its side effect and does not return a value.
+    
+    Raises:
+        ValueError: Raised when validation or downstream access fails and the caller
+            should stop or return an explicit error.
+    """
     if item.item_id != decision.item_id:
         raise ValueError("access decision item_id does not match discovered item")
     if item.source_id != decision.source_id:

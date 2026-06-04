@@ -111,6 +111,14 @@ data/documents.jsonl
 data/claims.jsonl
 ```
 
+Deployment audit events write to:
+
+```text
+outputs/audit/audit_events.jsonl
+```
+
+The audit path can be changed with `CRAWLER_AUDIT_LOG_PATH`.
+
 ## 5. Stage Specifications
 
 ### Stage 1: Validate Sources
@@ -250,9 +258,12 @@ Required fields:
 Rules:
 
 - Use content-type-specific extractors.
+- Prefer production extractors for complex public content: Trafilatura for HTML
+  and PyMuPDF for PDFs.
 - Preserve document provenance.
 - Mark empty or very short extraction as low quality.
 - Do not discard failed extraction records.
+- Preserve PDF page count and page-level extraction metadata where available.
 
 ### Stage 6: Clean Text
 
@@ -366,6 +377,7 @@ Input:
 - Source records.
 - Document records.
 - Claim records.
+- Claim cluster records, when available.
 
 Output:
 
@@ -388,6 +400,28 @@ Rules:
 - Missing evidence should reduce confidence.
 - Conflicting evidence should be visible, not hidden.
 - The final score is not a substitute for citations.
+
+### Stage 9.5: Detect Corroboration And Contradictions
+
+Input:
+
+- Claim records.
+- Document records.
+- Source records.
+
+Output:
+
+- `ClaimCluster` records.
+- Claim metadata fields for agreement status and conflicting claim IDs.
+
+Rules:
+
+- Similar claims should be grouped without losing individual citations.
+- Clusters should distinguish `single_source`, `corroborated`, and
+  `conflicted` evidence states.
+- Contradiction detection must be transparent and local until paid model or
+  warehouse services are explicitly approved.
+- Reports, API responses, and map detail panels should show agreement status.
 
 ### Stage 11: Store Records
 
@@ -426,6 +460,40 @@ Rules:
 - Include known gaps.
 - Include run metadata.
 
+### Deployment Boundary: Auth And Audit
+
+Input:
+
+- API deployment settings.
+- Analyst UI requests.
+
+Output:
+
+- Protected API responses.
+- Audit event JSONL records.
+
+Required audit fields:
+
+- `event_id`
+- `event_type`
+- `actor`
+- `created_at`
+- `run_id`
+- `claim_id`
+- `document_id`
+- `source_id`
+- `request_path`
+- `metadata`
+
+Rules:
+
+- `/health` may remain public for deployment probes.
+- Run data, map data, record access, audit writes, API-backed maps, and evidence
+  exports are protected when auth is configured.
+- Evidence exports must record a server-side `evidence_exported` audit event.
+- Audit metadata must stay small and should not contain raw sensitive document
+  text.
+
 ## 6. Error Handling
 
 Errors should be structured and logged.
@@ -454,6 +522,10 @@ Rules:
 - Existing documents should not be reprocessed unless content changed or the user requests reprocessing.
 - Runs should produce separate summaries.
 - Incremental behavior should be visible in logs.
+- Scheduled crawl runs should write `records/incremental_fetches.jsonl` with
+  `new`, `changed`, `unchanged`, `failed`, and `skipped` document statuses.
+- Unchanged documents should be logged but should not create duplicate extracted
+  documents, claims, or trust scores in the new run.
 
 ## 8. Logging
 

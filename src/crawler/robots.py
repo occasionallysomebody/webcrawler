@@ -1,4 +1,9 @@
-"""Access and politeness checks for candidate URLs."""
+"""Access and politeness checks for public-source crawling.
+
+This module centralizes robots.txt handling, allowed and blocked path checks,
+rate-limit defaults, and request headers. Keeping access decisions separate from
+fetching makes it possible to audit why a URL was fetched or skipped.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +30,19 @@ class FetchPolicy:
     default_rate_limit_seconds: float = DEFAULT_RATE_LIMIT_SECONDS
 
     def __post_init__(self) -> None:
+        """Validate dataclass defaults immediately after initialization.
+        
+        This private helper keeps the public function small and testable. It is
+        documented because new maintainers often need to inspect these helpers when
+        debugging a crawl run.
+        
+        Returns:
+            None: This function is used for its side effect and does not return a value.
+        
+        Raises:
+            ValueError: Raised when validation or downstream access fails and the caller
+                should stop or return an explicit error.
+        """
         if not self.user_agent.strip():
             raise ValueError("user_agent is required")
         if self.timeout_seconds <= 0:
@@ -147,6 +165,31 @@ def _decision(
     reason: str,
     metadata: Mapping[str, object] | None = None,
 ) -> AccessDecision:
+    """Support the module's public workflow by computing decision.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        item (DiscoveredItem): Single discovered URL or document candidate being
+            processed.
+        source (Source): Source registry entry that explains where a document or URL
+            came from.
+        policy (FetchPolicy): Fetch policy containing user-agent, timeout, retry, and
+            rate-limit settings.
+        checked_at (str): Value named ``checked_at`` supplied by the caller for this
+            pipeline step.
+        allowed (bool): Value named ``allowed`` supplied by the caller for this pipeline
+            step.
+        reason (str): Value named ``reason`` supplied by the caller for this pipeline
+            step.
+        metadata (Mapping[str, object] | None): Value named ``metadata`` supplied by the
+            caller for this pipeline step.
+    
+    Returns:
+        AccessDecision: Result produced for the next pipeline step or caller.
+    """
     return AccessDecision(
         item_id=item.item_id,
         source_id=source.source_id,
@@ -162,6 +205,21 @@ def _decision(
 
 
 def _robots_parser(base_url: str, robots_text: str) -> RobotFileParser:
+    """Support the module's public workflow by computing robots parser.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        base_url (str): Source-level URL used as the origin for robots and relative URL
+            handling.
+        robots_text (str): Value named ``robots_text`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        RobotFileParser: Result produced for the next pipeline step or caller.
+    """
     parser = RobotFileParser()
     parser.set_url(robots_url(base_url))
     parser.parse(robots_text.splitlines())
@@ -169,6 +227,22 @@ def _robots_parser(base_url: str, robots_text: str) -> RobotFileParser:
 
 
 def _url_path(url: str) -> str:
+    """Support the module's public workflow by computing url path.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        url (str): Public URL being normalized, checked, fetched, or cited.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    
+    Raises:
+        ValueError: Raised when validation or downstream access fails and the caller
+            should stop or return an explicit error.
+    """
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         raise ValueError(f"url must be absolute: {url!r}")
@@ -176,6 +250,21 @@ def _url_path(url: str) -> str:
 
 
 def _matching_prefix(path: str, prefixes: list[str]) -> str | None:
+    """Support the module's public workflow by computing matching prefix.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        path (str): Filesystem path used by this step. It may be a string or a ``Path``
+            depending on the caller.
+        prefixes (list[str]): Value named ``prefixes`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        str | None: Result produced for the next pipeline step or caller.
+    """
     for prefix in prefixes:
         normalized = prefix if prefix.startswith("/") else f"/{prefix}"
         if path == normalized or path.startswith(normalized.rstrip("/") + "/"):

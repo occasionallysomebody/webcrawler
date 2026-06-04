@@ -21,6 +21,10 @@ def test_generate_markdown_report_cites_sources_and_confidence() -> None:
                 claim_type="environmental_risk",
                 evidence_excerpt="Gas flaring pollution was reported near the terminal.",
                 confidence=0.7,
+                metadata={
+                    "corroboration_status": "corroborated",
+                    "corroboration_summary": "Supported by 2 source(s).",
+                },
             ),
         ],
         trust_scores=[
@@ -55,6 +59,7 @@ def test_generate_markdown_report_cites_sources_and_confidence() -> None:
     assert "# Azerbaijan Energy Signals" in markdown
     assert "## Evidence Summary" in markdown
     assert "Confidence: 0.812" in markdown
+    assert "Source agreement: corroborated" in markdown
     assert "Example Source: https://example.org/final" in markdown
     assert "## Interpretation" in markdown
     assert "- Only one source supplied." in markdown

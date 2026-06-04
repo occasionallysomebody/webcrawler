@@ -1,0 +1,2 @@
+source_id,name,tier,publisher_type,base_url,access_method,rate_limit_seconds,robots_required,enabled,notes,sitemap_url,rss_url,api_url,allowed_paths,blocked_paths,language,country,domain_tags,known_bias_or_limitation,proposal_status,proposed_by,proposed_at,reviewed_by,reviewed_at,review_notes
+bad-approved,Bad Approved Source,tier_2,government_regulator,https://bad.example,manual_review,0,true,true,Bad source.,,,,,,en,Azerbaijan,regulatory,Bad limitation.,approved,analyst,2026-06-04T00:00:00+00:00,,,

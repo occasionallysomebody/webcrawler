@@ -93,13 +93,20 @@ def test_build_map_data_attaches_claim_evidence() -> None:
 
 def test_render_map_html_embeds_maplibre_and_map_data() -> None:
     data = build_map_data(include_demo_overlays=True)
-    rendered = render_map_html(data)
+    rendered = render_map_html(
+        data,
+        api_base_url="http://127.0.0.1:8000",
+        run_id="run-1",
+    )
 
     assert "maplibre-gl" in rendered
     assert "basemaps.cartocdn.com" in rendered
     assert "Azerbaijan Energy Intelligence" in rendered
     assert "Sangachal Compliance Pressure" in rendered
     assert '<script type="application/json" id="map-data">' in rendered
+    assert '<script type="application/json" id="api-config">' in rendered
+    assert "/runs/${encodeURIComponent(apiConfig.run_id)}/map-data" in rendered
+    assert "http://127.0.0.1:8000" in rendered
 
 
 def test_write_map_ui_and_log_entry() -> None:
@@ -175,6 +182,8 @@ def test_load_map_records_and_write_ui_from_records_dir() -> None:
         result = write_map_ui(
             Path(tmp_dir) / "ui" / "map.html",
             records_dir=records_dir,
+            api_base_url="http://127.0.0.1:8000",
+            run_id="run-1",
         )
         content = result.path.read_text(encoding="utf-8")
         payload = content.split('<script type="application/json" id="map-data">')[1]
@@ -182,6 +191,7 @@ def test_load_map_records_and_write_ui_from_records_dir() -> None:
 
     assert len(records.claims) == 1
     assert data["summary"]["claims"] == 1
+    assert '"run_id": "run-1"' in content
     assert data["summary"]["trust_scores"] == 1
     assert any(
         feature["properties"]["layer"] == "claim"

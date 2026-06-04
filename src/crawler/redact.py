@@ -1,4 +1,9 @@
-"""Redaction rules for unnecessary sensitive text."""
+"""PII redaction utilities for cleaned document text.
+
+The project should preserve useful public evidence without storing unnecessary
+personal data. Redaction runs before long-term downstream storage so analyst
+outputs can cite claims while reducing avoidable privacy and compliance risk.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,20 @@ REDACTION_METHOD = "regex_redaction_v1"
 
 @dataclass(frozen=True, slots=True)
 class RedactionRule:
+    """Describe one regular-expression redaction rule.
+    
+    These lightweight classes make pipeline artifacts explicit. That helps analysts and
+    developers trace where each field came from instead of passing anonymous
+    dictionaries through the system.
+    
+    Attributes:
+        redaction_type (str): Stored value named ``redaction_type`` that travels with
+            this record.
+        placeholder (str): Stored value named ``placeholder`` that travels with this
+            record.
+        pattern (re.Pattern[str]): Stored value named ``pattern`` that travels with this
+            record.
+    """
     redaction_type: str
     placeholder: str
     pattern: re.Pattern[str]

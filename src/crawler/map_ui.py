@@ -1,4 +1,9 @@
-"""Static analyst map UI generation for Azerbaijan energy intelligence."""
+"""Azerbaijan energy intelligence map data and static HTML rendering.
+
+The map is an analyst-facing view over pipeline records. It converts sources,
+claims, trust scores, and optional demo overlays into GeoJSON so the static map,
+FastAPI endpoint, and Next UI can share the same evidence-backed contract.
+"""
 
 from __future__ import annotations
 
@@ -112,9 +117,20 @@ def load_map_records(records_dir: str | Path) -> MapUiRecords:
     )
 
 
-def render_map_html(map_data: dict[str, Any]) -> str:
+def render_map_html(
+    map_data: dict[str, Any],
+    *,
+    api_base_url: str | None = None,
+    run_id: str | None = None,
+) -> str:
     """Render a self-contained HTML dashboard with embedded GeoJSON."""
     payload = _json_for_script(map_data)
+    api_payload = _json_for_script(
+        {
+            "api_base_url": api_base_url or "",
+            "run_id": run_id or "",
+        }
+    )
     title = html.escape(str(map_data.get("title", "Energy Intelligence Map")))
     return f"""<!doctype html>
 <html lang="en">
@@ -318,10 +334,12 @@ def render_map_html(map_data: dict[str, Any]) -> str:
     </main>
   </div>
   <script type="application/json" id="map-data">{payload}</script>
+  <script type="application/json" id="api-config">{api_payload}</script>
   <script src="{MAPLIBRE_JS_URL}"></script>
   <script>
-    const mapData = JSON.parse(document.getElementById("map-data").textContent);
-    const features = mapData.features.features;
+    let mapData = JSON.parse(document.getElementById("map-data").textContent);
+    const apiConfig = JSON.parse(document.getElementById("api-config").textContent);
+    let features = mapData.features.features;
     const colors = {{ opportunity: "#1f73d1", environmental: "#bf2e2e", political: "#a46100", coverage: "#147d64", claim: "#6b55c8" }};
     function layerFeatures(layer) {{
       return {{ type: "FeatureCollection", features: features.filter((feature) => feature.properties.layer === layer) }};
@@ -348,6 +366,7 @@ def render_map_html(map_data: dict[str, Any]) -> str:
       document.querySelectorAll("[data-feature-id]").forEach((button) => button.addEventListener("click", () => selectFeature(features.find((candidate) => candidate.properties.id === button.dataset.featureId))));
     }}
     function renderDetail(feature) {{
+      if (!feature) return;
       const evidence = feature.properties.evidence || [];
       const tags = [feature.properties.layer, feature.properties.status, feature.properties.asset_type].filter(Boolean);
       document.getElementById("detail-panel").innerHTML = `<p class="panel-title">Selected Intelligence</p><h2>${{feature.properties.name}}</h2><div class="tag-row">${{tags.map((tag) => `<span class="tag">${{tag}}</span>`).join("")}}</div><p>${{feature.properties.summary}}</p><p class="muted">Confidence: ${{scoreText(feature) || "unscored"}}. Freshness: ${{feature.properties.freshness || "mixed"}}.</p><div class="evidence"><p class="panel-title">Evidence Ledger</p>${{evidence.length ? evidence.map((item) => `<p><strong>${{item.label}}</strong><br><span class="muted">${{item.excerpt || "No excerpt supplied."}}</span><br><a href="${{item.url}}" target="_blank" rel="noreferrer">${{item.url}}</a></p>`).join("") : `<p class="muted">No cited evidence attached to this feature.</p>`}}</div><div class="evidence"><p class="panel-title">Known Gaps</p><p class="muted">${{feature.properties.gaps || "Needs analyst review before capital allocation or compliance action."}}</p></div>`;
@@ -362,6 +381,33 @@ def render_map_html(map_data: dict[str, Any]) -> str:
         const coords = geometry.type === "Polygon" ? geometry.coordinates.flat() : geometry.coordinates.flat(2);
         const bounds = coords.reduce((box, coord) => box.extend(coord), new maplibregl.LngLatBounds(coords[0], coords[0]));
         map.fitBounds(bounds, {{ padding: 90, duration: 650 }});
+      }}
+    }}
+    function updateMapSources() {{
+      for (const layer of ["environmental", "political", "coverage", "opportunity", "claim"]) {{
+        const source = map.getSource(layer);
+        if (source) source.setData(layerFeatures(layer));
+      }}
+    }}
+    function apiMapDataUrl() {{
+      if (!apiConfig.run_id) return null;
+      const base = (apiConfig.api_base_url || "").replace(/\\/$/, "");
+      return `${{base}}/runs/${{encodeURIComponent(apiConfig.run_id)}}/map-data`;
+    }}
+    async function refreshFromApi() {{
+      const url = apiMapDataUrl();
+      if (!url) return;
+      try {{
+        const response = await fetch(url);
+        if (!response.ok) return;
+        mapData = await response.json();
+        features = mapData.features.features;
+        renderMetrics();
+        renderLists();
+        renderDetail(features[0]);
+        updateMapSources();
+      }} catch (error) {{
+        console.warn("Map API refresh failed; using embedded fallback.", error);
       }}
     }}
     renderMetrics();
@@ -383,6 +429,7 @@ def render_map_html(map_data: dict[str, Any]) -> str:
         map.on("mouseenter", id, () => map.getCanvas().style.cursor = "pointer");
         map.on("mouseleave", id, () => map.getCanvas().style.cursor = "");
       }}
+      refreshFromApi();
     }});
     document.querySelectorAll("[data-layer]").forEach((checkbox) => {{
       checkbox.addEventListener("change", () => {{
@@ -417,6 +464,8 @@ def write_map_ui(
     trust_scores: list[TrustScore] | None = None,
     documents: list[FetchedDocument] | None = None,
     include_demo_overlays: bool = False,
+    api_base_url: str | None = None,
+    run_id: str | None = None,
 ) -> MapUiResult:
     """Write a static HTML map dashboard and return metadata."""
     target = Path(path)
@@ -434,7 +483,10 @@ def write_map_ui(
         include_demo_overlays=include_demo_overlays,
     )
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render_map_html(data), encoding="utf-8")
+    target.write_text(
+        render_map_html(data, api_base_url=api_base_url, run_id=run_id),
+        encoding="utf-8",
+    )
     return MapUiResult(
         path=target,
         feature_count=len(data["features"]["features"]),
@@ -468,6 +520,27 @@ def _records_from_jsonl(
     record_type: type[Source] | type[Claim] | type[TrustScore] | type[FetchedDocument],
     id_field: str,
 ) -> list[Any]:
+    """Support the module's public workflow by computing records from jsonl.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        path (Path): Filesystem path used by this step. It may be a string or a ``Path``
+            depending on the caller.
+        record_type (type[Source] | type[Claim] | type[TrustScore] | type[FetchedDocument]): V
+            alue named ``record_type`` supplied by the caller for this pipeline step.
+        id_field (str): Value named ``id_field`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        list[Any]: Result produced for the next pipeline step or caller.
+    
+    Raises:
+        ValueError: Raised when validation or downstream access fails and the caller
+            should stop or return an explicit error.
+    """
     if not path.exists():
         return []
     records: dict[str, Any] = {}
@@ -488,6 +561,15 @@ def _records_from_jsonl(
 
 
 def _opportunity_features() -> list[dict[str, Any]]:
+    """Support the module's public workflow by computing opportunity features.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Returns:
+        list[dict[str, Any]]: Result produced for the next pipeline step or caller.
+    """
     return [
         _point(
             "opp-absheron-deepwater",
@@ -556,6 +638,20 @@ def _opportunity_features() -> list[dict[str, Any]]:
 
 
 def _environmental_pressure_features(topic_counts: Counter[str]) -> list[dict[str, Any]]:
+    """Support the module's public workflow by computing environmental pressure
+    features.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        topic_counts (Counter[str]): Counts of source coverage topics used to size or
+            explain map layers.
+    
+    Returns:
+        list[dict[str, Any]]: Result produced for the next pipeline step or caller.
+    """
     return [
         _polygon(
             "env-sangachal-flaring",
@@ -618,6 +714,15 @@ def _environmental_pressure_features(topic_counts: Counter[str]) -> list[dict[st
 
 
 def _political_pressure_features() -> list[dict[str, Any]]:
+    """Support the module's public workflow by computing political pressure features.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Returns:
+        list[dict[str, Any]]: Result produced for the next pipeline step or caller.
+    """
     return [
         _polygon(
             "pol-baku-regulatory",
@@ -664,6 +769,21 @@ def _source_coverage_features(
     sources: list[Source],
     topic_counts: Counter[str],
 ) -> list[dict[str, Any]]:
+    """Support the module's public workflow by computing source coverage features.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        sources (list[Source]): Source registry entries available to the current
+            pipeline step.
+        topic_counts (Counter[str]): Counts of source coverage topics used to size or
+            explain map layers.
+    
+    Returns:
+        list[dict[str, Any]]: Result produced for the next pipeline step or caller.
+    """
     coverage_points = [
         ("coverage-caspian-ecology", [50.55, 40.2], "Caspian Environmental Evidence", "ecology"),
         ("coverage-gas-flaring", [49.42, 40.12], "Gas Flaring Evidence", "gas_flaring"),
@@ -703,6 +823,24 @@ def _claim_features(
     documents: list[FetchedDocument],
     sources: list[Source],
 ) -> list[dict[str, Any]]:
+    """Support the module's public workflow by computing claim features.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        claims (list[Claim]): Claim records extracted from cleaned and redacted
+            documents.
+        trust_scores (list[TrustScore]): Trust score records keyed to extracted claims.
+        documents (list[FetchedDocument]): Fetched or extracted documents available to
+            the current pipeline step.
+        sources (list[Source]): Source registry entries available to the current
+            pipeline step.
+    
+    Returns:
+        list[dict[str, Any]]: Result produced for the next pipeline step or caller.
+    """
     score_by_claim = {score.claim_id: score for score in trust_scores}
     doc_by_id = {document.document_id: document for document in documents}
     source_by_id = {source.source_id: source for source in sources}
@@ -719,6 +857,11 @@ def _claim_features(
         score = score_by_claim.get(claim.claim_id)
         coordinates = positions.get(claim.claim_type, [49.86 + index * 0.015, 40.38])
         confidence = score.final_score if score and score.final_score is not None else claim.confidence
+        agreement_status = claim.metadata.get("corroboration_status", "unclustered")
+        agreement_summary = claim.metadata.get(
+            "corroboration_summary",
+            "No corroboration cluster is available for this claim.",
+        )
         features.append(
             _point(
                 f"claim-{index}-{claim.claim_id}",
@@ -726,8 +869,22 @@ def _claim_features(
                 f"Claim: {claim.claim_type.replace('_', ' ')}",
                 claim.claim_text[:180],
                 "claim",
+                claim_id=claim.claim_id,
+                document_id=claim.document_id,
+                source_id=document.source_id if document else None,
                 confidence=confidence or 0.4,
                 status="extracted",
+                agreement_status=agreement_status,
+                agreement_summary=agreement_summary,
+                corroborating_source_count=claim.metadata.get(
+                    "corroborating_source_count",
+                    0,
+                ),
+                independent_publisher_count=claim.metadata.get(
+                    "independent_publisher_count",
+                    0,
+                ),
+                conflicting_claim_ids=claim.metadata.get("conflicting_claim_ids", []),
                 freshness="pipeline claim",
                 evidence=[
                     {
@@ -736,13 +893,29 @@ def _claim_features(
                         "excerpt": claim.evidence_excerpt or claim.claim_text,
                     },
                 ],
-                gaps="Automated claim extraction requires analyst validation.",
+                gaps=(
+                    f"{agreement_summary} Automated claim extraction requires "
+                    "analyst validation."
+                ),
             )
         )
     return features
 
 
 def _source_counts_by_topic(sources: list[Source]) -> Counter[str]:
+    """Support the module's public workflow by computing source counts by topic.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        sources (list[Source]): Source registry entries available to the current
+            pipeline step.
+    
+    Returns:
+        Counter[str]: Result produced for the next pipeline step or caller.
+    """
     counter: Counter[str] = Counter()
     for source in sources:
         text = " ".join(
@@ -770,6 +943,29 @@ def _point(
     layer: str,
     **properties: Any,
 ) -> dict[str, Any]:
+    """Support the module's public workflow by computing point.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        feature_id (str): Value named ``feature_id`` supplied by the caller for this
+            pipeline step.
+        coordinates (list[float]): Value named ``coordinates`` supplied by the caller
+            for this pipeline step.
+        name (str): Value named ``name`` supplied by the caller for this pipeline step.
+        summary (str): Value named ``summary`` supplied by the caller for this pipeline
+            step.
+        layer (str): Value named ``layer`` supplied by the caller for this pipeline
+            step.
+        properties (Any): Value named ``properties`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        dict[str, Any]: Dictionary response that FastAPI serializes to JSON for the
+            frontend or caller.
+    """
     return {
         "type": "Feature",
         "geometry": {"type": "Point", "coordinates": coordinates},
@@ -791,6 +987,29 @@ def _polygon(
     layer: str,
     **properties: Any,
 ) -> dict[str, Any]:
+    """Support the module's public workflow by computing polygon.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        feature_id (str): Value named ``feature_id`` supplied by the caller for this
+            pipeline step.
+        coordinates (list[list[float]]): Value named ``coordinates`` supplied by the
+            caller for this pipeline step.
+        name (str): Value named ``name`` supplied by the caller for this pipeline step.
+        summary (str): Value named ``summary`` supplied by the caller for this pipeline
+            step.
+        layer (str): Value named ``layer`` supplied by the caller for this pipeline
+            step.
+        properties (Any): Value named ``properties`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        dict[str, Any]: Dictionary response that FastAPI serializes to JSON for the
+            frontend or caller.
+    """
     return {
         "type": "Feature",
         "geometry": {"type": "Polygon", "coordinates": [coordinates]},

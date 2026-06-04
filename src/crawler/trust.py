@@ -1,4 +1,9 @@
-"""Deterministic trust scoring for extracted claims."""
+"""Explainable trust scoring for extracted claims.
+
+Trust scores combine simple signals such as source tier, freshness,
+corroboration, independence, and conflict penalties. The formulas are small on
+purpose so analysts can understand why a claim received a given confidence.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 import re
 
-from crawler.models import Claim, Source, TrustScore
+from crawler.corroboration import claims_by_cluster
+from crawler.models import Claim, ClaimCluster, Source, TrustScore
 
 
 TIER_SCORES = {
@@ -72,13 +78,52 @@ def score_claims(
     claims: Iterable[Claim],
     *,
     sources_by_claim_id: dict[str, Source] | None = None,
+    claim_clusters: Iterable[ClaimCluster] = (),
 ) -> list[TrustScore]:
     """Score many claims with optional source context."""
     source_map = sources_by_claim_id or {}
-    return [
-        score_claim(claim, source=source_map.get(claim.claim_id))
-        for claim in claims
-    ]
+    claim_list = list(claims)
+    claim_by_id = {claim.claim_id: claim for claim in claim_list}
+    cluster_by_claim = claims_by_cluster(list(claim_clusters))
+    scores = []
+    for claim in claim_list:
+        cluster = cluster_by_claim.get(claim.claim_id)
+        corroborating_sources = []
+        conflicting_claims = []
+        if cluster is not None:
+            for other_claim_id in cluster.claim_ids:
+                if other_claim_id == claim.claim_id:
+                    continue
+                source = source_map.get(other_claim_id)
+                if source is not None:
+                    corroborating_sources.append(source)
+            conflicting_claims = [
+                claim_by_id[claim_id]
+                for claim_id in cluster.conflicting_claim_ids
+                if claim_id in claim_by_id and claim_id != claim.claim_id
+            ]
+        score = score_claim(
+            claim,
+            source=source_map.get(claim.claim_id),
+            corroborating_sources=corroborating_sources,
+            conflicting_claims=conflicting_claims,
+        )
+        if cluster is not None:
+            score.metadata = {
+                **score.metadata,
+                "corroboration_cluster_id": cluster.cluster_id,
+                "corroboration_status": cluster.status,
+                "corroborating_claim_ids": [
+                    claim_id for claim_id in cluster.claim_ids if claim_id != claim.claim_id
+                ],
+                "conflicting_claim_ids": [
+                    claim_id
+                    for claim_id in cluster.conflicting_claim_ids
+                    if claim_id != claim.claim_id
+                ],
+            }
+        scores.append(score)
+    return scores
 
 
 def source_tier_score(source: Source | None) -> float:
@@ -153,6 +198,19 @@ def trust_log_entry(score: TrustScore) -> dict[str, object]:
 
 
 def _latest_year(claim: Claim) -> int | None:
+    """Support the module's public workflow by computing latest year.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        claim (Claim): Claim record whose evidence, score, or display data is being
+            computed.
+    
+    Returns:
+        int | None: Result produced for the next pipeline step or caller.
+    """
     years: list[int] = []
     for entity in claim.entities:
         if entity.get("entity_type") == "date":
@@ -162,8 +220,34 @@ def _latest_year(claim: Claim) -> int | None:
 
 
 def _years(text: str) -> list[int]:
+    """Support the module's public workflow by computing years.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+    
+    Returns:
+        list[int]: Result produced for the next pipeline step or caller.
+    """
     return [int(match) for match in re.findall(r"\b(?:19|20)\d{2}\b", text)]
 
 
 def _clamp(value: float) -> float:
+    """Support the module's public workflow by computing clamp.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        value (float): Raw value being normalized or converted into a typed
+            representation.
+    
+    Returns:
+        float: Normalized score between 0 and 1 unless the function description says
+            otherwise.
+    """
     return max(0.0, min(1.0, value))

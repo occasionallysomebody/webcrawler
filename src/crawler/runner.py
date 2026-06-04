@@ -1,4 +1,9 @@
-"""Repeatable local pipeline runner."""
+"""Pipeline orchestration for repeatable local and demo runs.
+
+The runner connects the individual modules into named stages. It writes summary,
+record, UI, and log artifacts under one run directory so a developer can rerun a
+bounded crawl and inspect each output without relying on hidden process state.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +18,23 @@ from urllib.error import URLError
 from urllib.request import Request, build_opener
 
 from crawler.clean import clean_documents, cleaning_log_entry
+from crawler.corroboration import (
+    annotate_claims_with_clusters,
+    cluster_claims,
+    corroboration_log_entry,
+)
 from crawler.discovery import discover_expanded_source_urls, discover_manual_seed_urls
 from crawler.extract import extract_documents, extraction_log_entry
 from crawler.fetch import fetch_items, fetch_log_entry
+from crawler.incremental import (
+    changed_document_ids,
+    classify_incremental_fetches,
+    incremental_log_entry,
+    incremental_summary,
+    load_previous_documents,
+)
 from crawler.map_ui import map_ui_log_entry, write_map_ui
-from crawler.models import AccessDecision, CrawlRun, Source
+from crawler.models import AccessDecision, CrawlRun, IncrementalFetch, Source
 from crawler.redact import redact_documents, redaction_log_entry
 from crawler.robots import FetchPolicy, access_log_entry, evaluate_access, make_headers
 from crawler.robots import robots_url as source_robots_url
@@ -47,10 +64,39 @@ AUTOMATIC_CRAWL_STAGES = [
     "assess_source_health",
     "build_map_ui",
 ]
+INCREMENTAL_CRAWL_STAGES = [
+    "validate_sources",
+    "expand_discovery",
+    "discover_items",
+    "check_access",
+    "fetch_documents",
+    "classify_incremental_fetches",
+    "extract_documents",
+    "clean_documents",
+    "redact_documents",
+    "extract_signals",
+    "detect_corroboration",
+    "score_trust",
+    "assess_source_health",
+    "build_map_ui",
+]
 
 
 @dataclass(slots=True)
 class RunResult:
+    """Summarize the files and counters produced by one pipeline run.
+    
+    These lightweight classes make pipeline artifacts explicit. That helps analysts and
+    developers trace where each field came from instead of passing anonymous
+    dictionaries through the system.
+    
+    Attributes:
+        run (CrawlRun): Stored value named ``run`` that travels with this record.
+        summary (dict[str, Any]): Stored value named ``summary`` that travels with this
+            record.
+        output_dir (Path): Stored value named ``output_dir`` that travels with this
+            record.
+    """
     run: CrawlRun
     summary: dict[str, Any]
     output_dir: Path
@@ -68,6 +114,8 @@ def run_pipeline(
     policy: FetchPolicy = FetchPolicy(),
     opener: Any | None = None,
     robots_text_provider: Callable[[Source, FetchPolicy], str | None] | None = None,
+    map_api_base_url: str | None = None,
+    previous_run_id: str | None = None,
 ) -> RunResult:
     """Run a configured subset of local, network-free pipeline stages."""
     started_at = datetime.now(UTC).isoformat()
@@ -101,11 +149,30 @@ def run_pipeline(
     redacted_records = []
     entities = []
     claims = []
+    claim_clusters = []
     trust_scores = []
     source_health_records = []
     retry_candidates = []
+    incremental_records: list[IncrementalFetch] = []
+    actual_previous_run_id = None
+    previous_documents = {}
 
     try:
+        if _stage_enabled(stages, "classify_incremental_fetches"):
+            actual_previous_run_id, previous_documents = load_previous_documents(
+                output_root,
+                current_run_id=actual_run_id,
+                previous_run_id=previous_run_id,
+            )
+            _write_log(
+                log_path,
+                {
+                    "stage": "load_previous_run_metadata",
+                    "previous_run_id": actual_previous_run_id,
+                    "previous_document_keys": len(previous_documents),
+                },
+            )
+
         if _needs_sources(stages):
             registry = load_source_registry(source_registry_path)
             sources = registry.sources[:max_sources] if max_sources else registry.sources
@@ -171,13 +238,28 @@ def run_pipeline(
                 cache_dir=output_dir / "raw_cache",
                 policy=policy,
                 opener=opener,
+                previous_documents=previous_documents or None,
             )
             append_jsonl(records_dir / "fetched_documents.jsonl", fetched_documents)
             for document in fetched_documents:
                 _write_log(log_path, fetch_log_entry(document))
 
+        if _stage_enabled(stages, "classify_incremental_fetches"):
+            incremental_records = classify_incremental_fetches(
+                run_id=actual_run_id,
+                documents=fetched_documents,
+                previous_documents=previous_documents,
+                previous_run_id=actual_previous_run_id,
+            )
+            append_jsonl(records_dir / "incremental_fetches.jsonl", incremental_records)
+            _write_log(log_path, incremental_log_entry(incremental_records))
+
         if _stage_enabled(stages, "extract_documents"):
-            extracted_documents = extract_documents(fetched_documents)
+            documents_for_extraction = _documents_for_extraction(
+                fetched_documents,
+                incremental_records,
+            )
+            extracted_documents = extract_documents(documents_for_extraction)
             append_jsonl(records_dir / "extracted_documents.jsonl", extracted_documents)
             for document in extracted_documents:
                 _write_log(log_path, extraction_log_entry(document))
@@ -201,12 +283,27 @@ def run_pipeline(
                 claims.extend(extraction.claims)
                 _write_log(log_path, signal_log_entry(extraction))
             append_jsonl(records_dir / "entities.jsonl", entities)
+
+        if _stage_enabled(stages, "detect_corroboration"):
+            claim_clusters = cluster_claims(
+                claims,
+                documents_by_id={
+                    document.document_id: document for document in fetched_documents
+                },
+                sources_by_id={source.source_id: source for source in sources},
+            )
+            annotate_claims_with_clusters(claims, claim_clusters)
+            append_jsonl(records_dir / "claim_clusters.jsonl", claim_clusters)
+            _write_log(log_path, corroboration_log_entry(claim_clusters))
+
+        if _stage_enabled(stages, "extract_signals"):
             append_jsonl(records_dir / "claims.jsonl", claims)
 
         if _stage_enabled(stages, "score_trust"):
             trust_scores = score_claims(
                 claims,
                 sources_by_claim_id=_sources_by_claim_id(claims, fetched_documents, sources),
+                claim_clusters=claim_clusters,
             )
             append_jsonl(records_dir / "trust_scores.jsonl", trust_scores)
             for score in trust_scores:
@@ -233,6 +330,8 @@ def run_pipeline(
                 output_dir / "ui" / "azerbaijan_energy_map.html",
                 records_dir=records_dir,
                 sources=sources,
+                api_base_url=map_api_base_url,
+                run_id=actual_run_id if map_api_base_url is not None else None,
             )
             _write_log(log_path, map_ui_log_entry(ui_result))
     except Exception as error:  # keep run summaries visible for config/schema failures
@@ -264,9 +363,13 @@ def run_pipeline(
         "documents_redacted": len(redacted_records),
         "entities_extracted": len(entities),
         "claims_extracted": len(claims),
+        "claim_clusters": len(claim_clusters),
         "trust_scores_created": len(trust_scores),
         "source_health_records": len(source_health_records),
         "retry_candidates": len(retry_candidates),
+        "previous_run_id": actual_previous_run_id,
+        "incremental_fetches": len(incremental_records),
+        "incremental_summary": incremental_summary(incremental_records),
         "errors": errors,
         "outputs": [
             str(records_dir / "sources.jsonl"),
@@ -278,9 +381,11 @@ def run_pipeline(
             str(records_dir / "redacted_documents.jsonl"),
             str(records_dir / "entities.jsonl"),
             str(records_dir / "claims.jsonl"),
+            str(records_dir / "claim_clusters.jsonl"),
             str(records_dir / "trust_scores.jsonl"),
             str(records_dir / "source_health.jsonl"),
             str(records_dir / "retry_candidates.jsonl"),
+            str(records_dir / "incremental_fetches.jsonl"),
             str(output_dir / "ui" / "azerbaijan_energy_map.html"),
             str(log_path),
         ],
@@ -294,6 +399,18 @@ def run_pipeline(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the module's command-line interface.
+    
+    The pipeline is intentionally split into small steps so a junior developer can
+    inspect each artifact and understand why the next stage received its input.
+    
+    Args:
+        argv (list[str] | None): Optional command-line arguments. When omitted, Python
+            uses the process arguments.
+    
+    Returns:
+        int: Integer count or process exit code.
+    """
     parser = argparse.ArgumentParser(description="Run local webcrawler stages.")
     parser.add_argument("--source-registry", default="data/sources.csv")
     parser.add_argument("--output-root", default="outputs/runs")
@@ -305,8 +422,8 @@ def main(argv: list[str] | None = None) -> int:
             "Comma-separated stages. Supported: "
             "validate_sources,discover_items,check_access,fetch_documents,"
             "extract_documents,clean_documents,redact_documents,extract_signals,"
-            "score_trust,assess_source_health,build_map_ui,expand_discovery,"
-            "automatic_crawl"
+            "detect_corroboration,score_trust,assess_source_health,build_map_ui,expand_discovery,"
+            "automatic_crawl,incremental_crawl,scheduled_crawl"
         ),
     )
     parser.add_argument("--max-sources", type=int)
@@ -314,6 +431,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-fetches", type=int)
     parser.add_argument("--timeout-seconds", type=float, default=20.0)
     parser.add_argument("--user-agent", default="webcrawler/0.1")
+    parser.add_argument(
+        "--map-api-base-url",
+        help="Optional API base URL for generated HTML map refreshes.",
+    )
+    parser.add_argument(
+        "--previous-run-id",
+        help="Previous run ID for incremental or scheduled crawls.",
+    )
     args = parser.parse_args(argv)
 
     result = run_pipeline(
@@ -328,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
             user_agent=args.user_agent,
             timeout_seconds=args.timeout_seconds,
         ),
+        map_api_base_url=args.map_api_base_url,
+        previous_run_id=args.previous_run_id,
     )
     print(result.output_dir)
     print(result.summary["status"])
@@ -335,6 +462,20 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _limit_items_per_source(items, limit: int):
+    """Support the module's public workflow by computing limit items per source.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        items (Any): Discovered crawl items being limited, checked, fetched, or
+            converted.
+        limit (int): Maximum number of records to keep for this bounded operation.
+    
+    Returns:
+        Any: Result produced for the next pipeline step or caller.
+    """
     counts: dict[str, int] = {}
     limited = []
     for item in items:
@@ -347,6 +488,21 @@ def _limit_items_per_source(items, limit: int):
 
 
 def _write_log(path: Path, entry: dict[str, Any]) -> None:
+    """Support the module's public workflow by computing write log.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        path (Path): Filesystem path used by this step. It may be a string or a ``Path``
+            depending on the caller.
+        entry (dict[str, Any]): Value named ``entry`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        None: This function is used for its side effect and does not return a value.
+    """
     entry = {"created_at": datetime.now(UTC).isoformat(), **entry}
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
@@ -355,20 +511,55 @@ def _write_log(path: Path, entry: dict[str, Any]) -> None:
 
 
 def _default_run_id() -> str:
+    """Support the module's public workflow by computing default run id.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _expand_stages(stages: list[str]) -> list[str]:
+    """Support the module's public workflow by computing expand stages.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        stages (list[str]): Pipeline stage names requested by the caller.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     expanded: list[str] = []
     for stage in stages:
         if stage == "automatic_crawl":
             expanded.extend(AUTOMATIC_CRAWL_STAGES)
+        elif stage in {"incremental_crawl", "scheduled_crawl"}:
+            expanded.extend(INCREMENTAL_CRAWL_STAGES)
         else:
             expanded.append(stage)
     return list(dict.fromkeys(expanded))
 
 
 def _needs_sources(stages: list[str]) -> bool:
+    """Support the module's public workflow by computing needs sources.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        stages (list[str]): Pipeline stage names requested by the caller.
+    
+    Returns:
+        bool: Boolean decision used by the caller to choose the next pipeline step.
+    """
     return any(
         stage in stages
         for stage in [
@@ -377,10 +568,12 @@ def _needs_sources(stages: list[str]) -> bool:
             "discover_items",
             "check_access",
             "fetch_documents",
+            "classify_incremental_fetches",
             "extract_documents",
             "clean_documents",
             "redact_documents",
             "extract_signals",
+            "detect_corroboration",
             "score_trust",
             "assess_source_health",
             "build_map_ui",
@@ -389,6 +582,18 @@ def _needs_sources(stages: list[str]) -> bool:
 
 
 def _needs_discovery(stages: list[str]) -> bool:
+    """Support the module's public workflow by computing needs discovery.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        stages (list[str]): Pipeline stage names requested by the caller.
+    
+    Returns:
+        bool: Boolean decision used by the caller to choose the next pipeline step.
+    """
     return any(
         stage in stages
         for stage in [
@@ -396,10 +601,12 @@ def _needs_discovery(stages: list[str]) -> bool:
             "discover_items",
             "check_access",
             "fetch_documents",
+            "classify_incremental_fetches",
             "extract_documents",
             "clean_documents",
             "redact_documents",
             "extract_signals",
+            "detect_corroboration",
             "score_trust",
             "assess_source_health",
         ]
@@ -407,7 +614,42 @@ def _needs_discovery(stages: list[str]) -> bool:
 
 
 def _stage_enabled(stages: list[str], stage: str) -> bool:
+    """Support the module's public workflow by computing stage enabled.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        stages (list[str]): Pipeline stage names requested by the caller.
+        stage (str): Single pipeline stage name being checked.
+    
+    Returns:
+        bool: Boolean decision used by the caller to choose the next pipeline step.
+    """
     return stage in stages
+
+
+def _documents_for_extraction(
+    documents,
+    incremental_records: list[IncrementalFetch],
+):
+    """Return current documents that should continue through extraction.
+
+    Args:
+        documents (Any): Current fetched documents.
+        incremental_records (list[IncrementalFetch]): Optional incremental
+            comparison records.
+
+    Returns:
+        Any: Documents to extract. In non-incremental runs, every fetched
+        document is returned.
+    """
+
+    if not incremental_records:
+        return documents
+    changed_ids = changed_document_ids(incremental_records)
+    return [document for document in documents if document.document_id in changed_ids]
 
 
 def _check_access(
@@ -417,6 +659,26 @@ def _check_access(
     policy: FetchPolicy,
     robots_text_provider: Callable[[Source, FetchPolicy], str | None] | None,
 ) -> list[AccessDecision]:
+    """Support the module's public workflow by computing check access.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        items (Any): Discovered crawl items being limited, checked, fetched, or
+            converted.
+        sources (list[Source]): Source registry entries available to the current
+            pipeline step.
+        policy (FetchPolicy): Fetch policy containing user-agent, timeout, retry, and
+            rate-limit settings.
+        robots_text_provider (Callable[[Source, FetchPolicy], str | None] | None): Value
+            named ``robots_text_provider`` supplied by the caller for this pipeline
+            step.
+    
+    Returns:
+        list[AccessDecision]: Result produced for the next pipeline step or caller.
+    """
     source_by_id = {source.source_id: source for source in sources}
     robots_cache: dict[str, str | None] = {}
     decisions: list[AccessDecision] = []
@@ -433,6 +695,21 @@ def _check_access(
 
 
 def _fetch_robots_text(source: Source, policy: FetchPolicy) -> str | None:
+    """Support the module's public workflow by computing fetch robots text.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        source (Source): Source registry entry that explains where a document or URL
+            came from.
+        policy (FetchPolicy): Fetch policy containing user-agent, timeout, retry, and
+            rate-limit settings.
+    
+    Returns:
+        str | None: Result produced for the next pipeline step or caller.
+    """
     request = Request(
         source_robots_url(source.base_url),
         headers=make_headers(policy),
@@ -451,6 +728,22 @@ def _fetch_robots_text(source: Source, policy: FetchPolicy) -> str | None:
 
 
 def _sources_by_claim_id(claims, documents, sources: list[Source]) -> dict[str, Source]:
+    """Support the module's public workflow by computing sources by claim id.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        claims (Any): Claim records extracted from cleaned and redacted documents.
+        documents (Any): Fetched or extracted documents available to the current
+            pipeline step.
+        sources (list[Source]): Source registry entries available to the current
+            pipeline step.
+    
+    Returns:
+        dict[str, Source]: Result produced for the next pipeline step or caller.
+    """
     documents_by_id = {document.document_id: document for document in documents}
     sources_by_id = {source.source_id: source for source in sources}
     result = {}

@@ -3,5 +3,14 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.egg-info/
+.env
+.env.local
+.env.*.local
+node_modules/
+.next/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+docs/_build/
 outputs/runs/*
 !outputs/runs/.gitkeep

@@ -1,4 +1,10 @@
-"""Discovery helpers that produce normalized candidate records."""
+"""Discovery helpers for turning approved sources into crawl items.
+
+Discovery is deliberately separate from fetching. A source can yield candidate
+URLs from manual seeds, sitemaps, RSS/Atom feeds, or approved JSON APIs without
+immediately downloading every document. That separation keeps the crawl bounded
+and makes source expansion auditable.
+"""
 
 from __future__ import annotations
 
@@ -158,6 +164,24 @@ def _expanded_urls(
     policy: FetchPolicy,
     opener,
 ) -> list[tuple[str, str, list[str]]]:
+    """Support the module's public workflow by computing expanded urls.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        source (Source): Source registry entry that explains where a document or URL
+            came from.
+        policy (FetchPolicy): Fetch policy containing user-agent, timeout, retry, and
+            rate-limit settings.
+        opener (Any): Value named ``opener`` supplied by the caller for this pipeline
+            step.
+    
+    Returns:
+        list[tuple[str, str, list[str]]]: Result produced for the next pipeline step or
+            caller.
+    """
     expanded: list[tuple[str, str, list[str]]] = []
     for method, metadata_key, parser in (
         (SITEMAP_METHOD, "sitemap_url", _parse_sitemap_urls),
@@ -179,6 +203,22 @@ def _fetch_discovery_text(
     policy: FetchPolicy,
     opener,
 ) -> str | None:
+    """Support the module's public workflow by computing fetch discovery text.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        url (str): Public URL being normalized, checked, fetched, or cited.
+        policy (FetchPolicy): Fetch policy containing user-agent, timeout, retry, and
+            rate-limit settings.
+        opener (Any): Value named ``opener`` supplied by the caller for this pipeline
+            step.
+    
+    Returns:
+        str | None: Result produced for the next pipeline step or caller.
+    """
     request_opener = opener or build_opener()
     request = Request(url, headers=make_headers(policy), method="GET")
     try:
@@ -194,6 +234,18 @@ def _fetch_discovery_text(
 
 
 def _parse_sitemap_urls(text: str) -> list[str]:
+    """Support the module's public workflow by computing parse sitemap urls.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     try:
         root = ET.fromstring(text)
     except ET.ParseError:
@@ -206,6 +258,18 @@ def _parse_sitemap_urls(text: str) -> list[str]:
 
 
 def _parse_feed_urls(text: str) -> list[str]:
+    """Support the module's public workflow by computing parse feed urls.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     try:
         root = ET.fromstring(text)
     except ET.ParseError:
@@ -221,6 +285,18 @@ def _parse_feed_urls(text: str) -> list[str]:
 
 
 def _parse_api_urls(text: str) -> list[str]:
+    """Support the module's public workflow by computing parse api urls.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
@@ -229,6 +305,19 @@ def _parse_api_urls(text: str) -> list[str]:
 
 
 def _walk_urls(value) -> list[str]:
+    """Support the module's public workflow by computing walk urls.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        value (Any): Raw value being normalized or converted into a typed
+            representation.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     urls: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
@@ -250,6 +339,27 @@ def _discovered_item(
     *,
     registry_url: str,
 ) -> DiscoveredItem:
+    """Support the module's public workflow by computing discovered item.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        source (Source): Source registry entry that explains where a document or URL
+            came from.
+        normalized_url (str): Value named ``normalized_url`` supplied by the caller for
+            this pipeline step.
+        discovery_method (str): Value named ``discovery_method`` supplied by the caller
+            for this pipeline step.
+        discovered_at (str): Value named ``discovered_at`` supplied by the caller for
+            this pipeline step.
+        registry_url (str): Value named ``registry_url`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        DiscoveredItem: Result produced for the next pipeline step or caller.
+    """
     return DiscoveredItem(
         item_id=discovered_item_id(
             source.source_id,
@@ -273,10 +383,37 @@ def _discovered_item(
 
 
 def _local_name(tag: str) -> str:
+    """Support the module's public workflow by computing local name.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        tag (str): HTML tag name currently being handled by the parser.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     return tag.rsplit("}", 1)[-1].lower()
 
 
 def _normalize_netloc(netloc: str, scheme: str) -> str:
+    """Support the module's public workflow by computing normalize netloc.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        netloc (str): Value named ``netloc`` supplied by the caller for this pipeline
+            step.
+        scheme (str): Value named ``scheme`` supplied by the caller for this pipeline
+            step.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     lowered = netloc.lower()
     if scheme == "http" and lowered.endswith(":80"):
         return lowered[:-3]

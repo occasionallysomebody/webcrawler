@@ -59,12 +59,39 @@ def test_extract_document_reads_html_title_date_and_text() -> None:
     assert extracted.url == "https://example.org/report"
     assert extracted.title == "Azerbaijan Energy Report"
     assert extracted.published_at == "2026-05-30"
-    assert extracted.extraction_method == "html"
+    assert extracted.extraction_method in {"html_trafilatura", "html_basic"}
     assert "Navigation should not appear" not in extracted.extracted_text
     assert "First paragraph about public energy-sector evidence." in extracted.extracted_text
     assert extracted.metadata["final_url"] == "https://example.org/final-report"
     assert extracted.page_count == 1
     assert extracted.error is None
+
+
+def test_extract_document_prefers_article_text_over_html_boilerplate() -> None:
+    html = """<!doctype html>
+    <html>
+      <body>
+        <nav>Home Reports Contact Social Links</nav>
+        <article>
+          <h1>Facility Monitoring Update</h1>
+          <p>Satellite monitoring reported a public oil sheen observation near
+          offshore energy infrastructure in the Caspian Sea.</p>
+          <p>The report links the observation to environmental review rather
+          than private operational details.</p>
+        </article>
+        <aside>Related stories should not dominate the extraction.</aside>
+        <footer>Subscribe and copyright text.</footer>
+      </body>
+    </html>"""
+
+    with TemporaryDirectory() as tmp_dir:
+        html_path = Path(tmp_dir) / "article.html"
+        html_path.write_text(html, encoding="utf-8")
+        extracted = extract_document(fetched_document(str(html_path)))
+
+    assert "Satellite monitoring reported" in extracted.extracted_text
+    assert "copyright text" not in extracted.extracted_text
+    assert extracted.extraction_method in {"html_trafilatura", "html_basic"}
 
 
 def test_extract_document_flags_empty_html_as_low_quality() -> None:
@@ -101,17 +128,40 @@ def test_extract_document_returns_failure_records_for_unusable_fetches() -> None
     assert fetch_failed.error == "fetch_error:http_error:404"
 
 
-def test_extract_document_explicitly_marks_pdf_unsupported() -> None:
+def test_extract_document_extracts_pdf_text_and_page_metadata() -> None:
     with TemporaryDirectory() as tmp_dir:
         pdf_path = Path(tmp_dir) / "report.pdf"
-        pdf_path.write_bytes(b"%PDF-1.4 fixture")
+        write_pdf_fixture(
+            pdf_path,
+            [
+                "Page one public evidence about Caspian oil and gas reporting.",
+                "Page two adds environmental risk context for analyst review.",
+            ],
+        )
         extracted = extract_document(
             fetched_document(str(pdf_path), content_type="application/pdf"),
         )
 
-    assert extracted.extraction_method == "pdf_unsupported"
+    assert extracted.extraction_method == "pdf_pymupdf"
+    assert extracted.extraction_quality in {"medium", "high"}
+    assert extracted.page_count == 2
+    assert "[Page 1]" in extracted.extracted_text
+    assert "environmental risk context" in extracted.extracted_text
+    assert extracted.metadata["pages"][0]["page_number"] == 1
+    assert extracted.error is None
+
+
+def test_extract_document_records_malformed_pdf_failure() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        pdf_path = Path(tmp_dir) / "broken.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 fixture but not a valid document")
+        extracted = extract_document(
+            fetched_document(str(pdf_path), content_type="application/pdf"),
+        )
+
+    assert extracted.extraction_method == "pdf_pymupdf"
     assert extracted.extraction_quality == "failed"
-    assert extracted.error == "pdf_extraction_not_configured"
+    assert extracted.error.startswith("pdf_open_failed:")
 
 
 def test_extract_documents_continues_and_logs_entries() -> None:
@@ -136,3 +186,22 @@ def test_extraction_quality_thresholds() -> None:
     assert extraction_quality("short text") == "low"
     assert extraction_quality("word " * 25) == "medium"
     assert extraction_quality("word " * 120) == "high"
+
+
+def write_pdf_fixture(path: Path, pages: list[str]) -> None:
+    import fitz
+
+    pdf = fitz.open()
+    try:
+        for text in pages:
+            page = pdf.new_page(width=595, height=842)
+            page.insert_text((72, 72), text, fontsize=12)
+        pdf.set_metadata(
+            {
+                "title": "Fixture PDF Report",
+                "creationDate": "D:20260530000000",
+            }
+        )
+        pdf.save(path)
+    finally:
+        pdf.close()

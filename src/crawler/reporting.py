@@ -1,4 +1,9 @@
-"""Analyst-ready Markdown reporting."""
+"""Markdown reporting for cited crawler outputs.
+
+Reports turn extracted claims and trust scores into human-readable analyst
+briefs. This module keeps citation formatting explicit so a reader can move from
+a summary sentence back to the source URL and confidence explanation.
+"""
 
 from __future__ import annotations
 
@@ -44,6 +49,7 @@ def generate_markdown_report(
                 f"- Claim: {claim.claim_text}",
                 f"- Type: {claim.claim_type}",
                 f"- Confidence: {confidence}",
+                f"- Source agreement: {_agreement(claim)}",
                 f"- Citation: {citation}",
                 f"- Evidence excerpt: {claim.evidence_excerpt or 'Not available.'}",
                 "",
@@ -99,6 +105,21 @@ def reporting_log_entry(path: str | Path, *, claim_count: int) -> dict[str, obje
 
 
 def _citation(document: FetchedDocument | None, source: Source | None) -> str:
+    """Support the module's public workflow by computing citation.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        document (FetchedDocument | None): Document record being transformed by this
+            helper.
+        source (Source | None): Source registry entry that explains where a document or
+            URL came from.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     if document is None:
         return "Missing document metadata."
     label = source.name if source else document.source_id
@@ -108,8 +129,40 @@ def _citation(document: FetchedDocument | None, source: Source | None) -> str:
 
 
 def _confidence(score: TrustScore | None, claim: Claim) -> str:
+    """Support the module's public workflow by computing confidence.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        score (TrustScore | None): Trust score or numeric value being converted into
+            output data.
+        claim (Claim): Claim record whose evidence, score, or display data is being
+            computed.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     if score and score.final_score is not None:
         return f"{score.final_score:.3f} ({score.score_explanation})"
     if claim.confidence is not None:
         return f"{claim.confidence:.3f} (claim extraction confidence only)"
     return "Unknown"
+
+
+def _agreement(claim: Claim) -> str:
+    """Return source agreement context for a claim.
+
+    Args:
+        claim (Claim): Claim record whose corroboration metadata may be shown.
+
+    Returns:
+        str: Human-readable agreement or conflict summary.
+    """
+
+    status = claim.metadata.get("corroboration_status")
+    summary = claim.metadata.get("corroboration_summary")
+    if status and summary:
+        return f"{status}: {summary}"
+    return "Not assessed."

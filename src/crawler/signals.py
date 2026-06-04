@@ -1,4 +1,9 @@
-"""Transparent entity and claim extraction over redacted text."""
+"""Transparent entity and claim extraction from redacted documents.
+
+This module intentionally starts with explainable dictionaries and regular
+expressions. The goal is not perfect NLP; it is to produce auditable candidate
+entities and claims that can be scored, cited, reviewed, and improved later.
+"""
 
 from __future__ import annotations
 
@@ -71,6 +76,20 @@ CLAIM_KEYWORDS = {
 
 @dataclass(slots=True)
 class SignalExtraction:
+    """Bundle entities and claims extracted from one redacted document.
+    
+    These lightweight classes make pipeline artifacts explicit. That helps analysts and
+    developers trace where each field came from instead of passing anonymous
+    dictionaries through the system.
+    
+    Attributes:
+        document_id (str): Stored value named ``document_id`` that travels with this
+            record.
+        entities (list[Entity]): Stored value named ``entities`` that travels with this
+            record.
+        claims (list[Claim]): Claim records extracted from cleaned and redacted
+            documents.
+    """
     document_id: str
     entities: list[Entity]
     claims: list[Claim]
@@ -189,6 +208,30 @@ def _entity(
     *,
     confidence: float,
 ) -> Entity:
+    """Support the module's public workflow by computing entity.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        document (RedactedDocument): Document record being transformed by this helper.
+        entity_type (str): Value named ``entity_type`` supplied by the caller for this
+            pipeline step.
+        text_value (str): Value named ``text_value`` supplied by the caller for this
+            pipeline step.
+        normalized (str): Value named ``normalized`` supplied by the caller for this
+            pipeline step.
+        full_text (str): Value named ``full_text`` supplied by the caller for this
+            pipeline step.
+        start (int): Value named ``start`` supplied by the caller for this pipeline
+            step.
+        confidence (float): Value named ``confidence`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        Entity: Result produced for the next pipeline step or caller.
+    """
     return Entity(
         entity_id=_stable_id("entity", document.document_id, entity_type, normalized),
         document_id=document.document_id,
@@ -202,6 +245,20 @@ def _entity(
 
 
 def _entities_in_text(entities: list[Entity], text: str) -> list[Entity]:
+    """Support the module's public workflow by computing entities in text.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        entities (list[Entity]): Value named ``entities`` supplied by the caller for
+            this pipeline step.
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+    
+    Returns:
+        list[Entity]: Result produced for the next pipeline step or caller.
+    """
     lowered = text.casefold()
     return [
         entity
@@ -212,6 +269,19 @@ def _entities_in_text(entities: list[Entity], text: str) -> list[Entity]:
 
 
 def _claim_type(sentence: str) -> str | None:
+    """Support the module's public workflow by computing claim type.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        sentence (str): Value named ``sentence`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        str | None: Result produced for the next pipeline step or caller.
+    """
     lowered = sentence.casefold()
     for claim_type, keywords in CLAIM_KEYWORDS.items():
         if any(keyword in lowered for keyword in keywords):
@@ -220,6 +290,18 @@ def _claim_type(sentence: str) -> str | None:
 
 
 def _sentences(text: str) -> list[str]:
+    """Support the module's public workflow by computing sentences.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     return [
         sentence.strip()
         for sentence in SENTENCE_SPLIT_PATTERN.split(text.replace("\n", " "))
@@ -228,11 +310,42 @@ def _sentences(text: str) -> list[str]:
 
 
 def _excerpt(text: str, start: int, radius: int = 120) -> str:
+    """Support the module's public workflow by computing excerpt.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+        start (int): Value named ``start`` supplied by the caller for this pipeline
+            step.
+        radius (int): Value named ``radius`` supplied by the caller for this pipeline
+            step.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     begin = max(0, start - radius)
     end = min(len(text), start + radius)
     return re.sub(r"\s+", " ", text[begin:end]).strip()
 
 
 def _stable_id(prefix: str, *parts: str) -> str:
+    """Support the module's public workflow by computing stable id.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        prefix (str): Value named ``prefix`` supplied by the caller for this pipeline
+            step.
+        parts (str): Value named ``parts`` supplied by the caller for this pipeline
+            step.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
     return f"{prefix}-{digest[:16]}"

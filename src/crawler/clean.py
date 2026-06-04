@@ -1,4 +1,10 @@
-"""Deterministic cleaning and normalization for extracted text."""
+"""Text cleaning utilities for extracted documents.
+
+Extraction often leaves navigation labels, repeated whitespace, cookie banners,
+and other page chrome mixed with useful evidence. This module normalizes text
+before redaction and signal extraction so later stages compare claims against a
+cleaner and more predictable document body.
+"""
 
 from __future__ import annotations
 
@@ -160,6 +166,28 @@ def _cleaned(
     language: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> CleanDocument:
+    """Support the module's public workflow by computing cleaned.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        document (ExtractedDocument): Document record being transformed by this helper.
+        clean_text (str): Value named ``clean_text`` supplied by the caller for this
+            pipeline step.
+        quality_flags (list[str]): Value named ``quality_flags`` supplied by the caller
+            for this pipeline step.
+        word_count (int | None): Value named ``word_count`` supplied by the caller for
+            this pipeline step.
+        language (str | None): Value named ``language`` supplied by the caller for this
+            pipeline step.
+        metadata (dict[str, Any] | None): Value named ``metadata`` supplied by the
+            caller for this pipeline step.
+    
+    Returns:
+        CleanDocument: Result produced for the next pipeline step or caller.
+    """
     return CleanDocument(
         document_id=document.document_id,
         clean_text=clean_text,
@@ -172,5 +200,17 @@ def _cleaned(
 
 
 def _split_paragraphs(text: str) -> list[str]:
+    """Support the module's public workflow by computing split paragraphs.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        text (str): Text content being parsed, cleaned, redacted, or searched.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     normalized_newlines = text.replace("\r\n", "\n").replace("\r", "\n")
     return re.split(r"\n\s*\n+", normalized_newlines)

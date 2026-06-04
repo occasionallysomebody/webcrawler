@@ -8,12 +8,19 @@ version = "0.1.0"
 description = "Auditable public-source crawling and analysis pipeline prototype."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "fastapi>=0.115",
+  "pymupdf>=1.24",
+  "trafilatura>=1.9",
+  "uvicorn>=0.30",
+]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
   "ruff>=0.4",
+  "sphinx>=7.0",
+  "myst-parser>=2.0",
 ]
 
 [tool.setuptools.packages.find]

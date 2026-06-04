@@ -5,6 +5,41 @@ project is intentionally staged: start with local files and testable modules,
 then add more pipeline stages only after each earlier stage produces a verified
 artifact.
 
+## Client-Friendly Overview
+
+| Question | Short answer | What this means in practice |
+| --- | --- | --- |
+| What is this project? | This is a public-source intelligence crawler that collects approved web pages and reports, extracts useful text, finds risk claims, scores source confidence, and shows the results in an analyst dashboard. | It turns scattered public information into cited, reviewable evidence so a client can see where each finding came from. |
+| What is the use case? | The demo use case is monitoring Azerbaijan oil and gas risks for environmental, governance, operational, and reputational signals. | A client can review what public sources say about assets, companies, topics, and changes over time without relying on mock data. |
+| How do you run the project? | Install the project once, run one crawler command to create real records, start the API, then start the web dashboard. | In VS Code, open a terminal, run `cd C:\repos\webcrawler`, run `python -m pip install -e ".[dev]"`, run `python -m crawler.runner --run-id demo-client --stages automatic_crawl --max-sources 3 --max-items-per-source 2 --max-fetches 3`, run `python -m uvicorn crawler.api:app --host 127.0.0.1 --port 8000`, open a second terminal, run `cd C:\repos\webcrawler\frontend`, run `npm.cmd install`, run `npm.cmd run dev`, and open `http://127.0.0.1:3000`. |
+| What technologies are used and why? | Python runs the crawler, FastAPI serves the records, Next.js builds the dashboard, MapLibre shows map data, JSONL keeps evidence auditable, SQLite supports local querying, Trafilatura extracts HTML, and PyMuPDF extracts PDFs. | This stack keeps the prototype inspectable, testable, and usable at `$0` locally before any paid hosting decision is made. |
+| What is this project, and what is it not? | It is a proof-of-concept public-source intelligence pipeline, not a fully hosted commercial SaaS, not a private-data scraper, not a paywall bypass tool, and not a replacement for analyst or legal review. | The scope is approved public sources, real crawled records, transparent evidence, and functional dashboard controls, while always-on hosting and enterprise compliance remain out of scope for the local demo. |
+| What "production level" is this crawler? | It is a strong local prototype with production-shaped boundaries, but it is not yet a full production crawler. | It already has auth, audit logs, scheduled incremental crawls, extraction, trust scoring, corroboration checks, and a dashboard, but still needs durable production storage, analyst review workflow, observability, browser smoke tests, and deployment hardening. |
+| What resources would it take to build a production-level crawler? | A production version would need hosted compute, durable database storage, object storage, monitoring, backups, secure deployment, source review, and ongoing maintenance. | With the current `$0` preference, use local demos or free tiers; a serious always-on client deployment would usually require owned hardware or paid hosting plus at least one engineer and one analyst/compliance reviewer. |
+
+## Client Demo Checklist
+
+| Step | What to do | What the client should see |
+| --- | --- | --- |
+| 1. Open the project folder | In the VS Code terminal, run `cd C:\repos\webcrawler`. | The terminal prompt is inside the project root before any Python command runs. |
+| 2. Install Python dependencies | Run `python -m pip install -e ".[dev]"`. | Python can find the crawler code and its required libraries. |
+| 3. Create crawler records | Run `python -m crawler.runner --run-id demo-client --stages automatic_crawl --max-sources 3 --max-items-per-source 2 --max-fetches 3`. | The project creates local evidence files from approved public websites. |
+| 4. Start the backend | In that same `C:\repos\webcrawler` terminal, run `python -m uvicorn crawler.api:app --host 127.0.0.1 --port 8000` and leave it running. | The dashboard has a local API that can read the crawler records. |
+| 5. Open the dashboard folder | Open a second VS Code terminal and run `cd C:\repos\webcrawler\frontend`. | The second terminal is inside the dashboard folder before any npm command runs. |
+| 6. Install dashboard dependencies | Run `npm.cmd install`. | The dashboard has the local JavaScript packages it needs. |
+| 7. Start the dashboard | Run `npm.cmd run dev` and leave it running. | The web app starts locally without paid hosting. |
+| 8. Open the dashboard | Visit `http://127.0.0.1:3000`. | The client can use the buttons, filters, map, source list, claims, trust scores, corroboration status, and evidence export against real crawled data. |
+| 9. Keep cost at `$0` | Run locally first and avoid paid cloud services until a production pilot is approved. | Vercel free tier may work for the frontend, but the current safest `$0` path is a local demo because the crawler and API need a running backend. |
+
+The demo command limits crawling to 3 sources only so a client can see results
+quickly; this is not a product limit, and real monitoring should use limits
+that match the approved source registry, crawl schedule, and politeness rules.
+If Step 3 says `No module named crawler` or `ModuleNotFoundError`, rerun Step 2
+from `C:\repos\webcrawler` and then run Step 3 again from that same folder.
+If the VS Code PowerShell terminal blocks a command or behaves differently from
+these steps, open a new VS Code terminal with Command Prompt and run the same
+`cd` and command lines there.
+
 ## Current Status
 
 The repository has the project skeleton, initial data models, and source
@@ -44,6 +79,20 @@ registry/access/discovery/fetching layers in place.
   and simple JSON API endpoints from the seed registry.
 - Milestone 18: source health and crawl frontier records are generated for
   repeat production runs.
+- Milestone 19: proposed-source onboarding and approval are implemented before
+  new domains can enter active crawling.
+- Milestone 20: FastAPI-backed production UI API boundary is implemented while
+  preserving the static map export.
+- Milestone 21: a Next.js/Vercel-style analyst UI POC is implemented in
+  `frontend/` and consumes the FastAPI API.
+- Milestone 22: deployment settings, authenticated API access, analyst audit
+  events, shared run storage configuration, and CI verification are implemented.
+- Milestone 23: production HTML and PDF extractors are implemented with
+  Trafilatura and PyMuPDF.
+- Milestone 24: scheduled incremental crawls are implemented with previous-run
+  comparison and unchanged-document skipping.
+- Milestone 25: corroboration and contradiction detection are implemented with
+  local deterministic claim clusters.
 
 ## Repository Layout
 
@@ -54,6 +103,21 @@ notebooks/         Manual analysis and validation notebooks
 outputs/           Generated artifacts from agent runs and pipeline runs
 src/crawler/       Pipeline modules
 tests/fixtures/    Example records and test inputs
+```
+
+Known technical debt is tracked in `docs/technical_debt.md`. Update it when a
+milestone accepts, discovers, or resolves implementation debt.
+
+The detailed roadmap in `implementation_plan.md` currently extends through
+Milestone 30, covering production extraction, scheduling, corroboration,
+analyst review, storage, observability, CI/CD, and commercial demo readiness.
+
+Developer documentation is built with Sphinx from `docs/` and Python
+docstrings. Build it with:
+
+```powershell
+python -m pip install -e ".[dev]"
+python -m sphinx -b html docs docs/_build/html
 ```
 
 Generated outputs should stay under `outputs/`. Temporary raw caches belong in a
@@ -204,7 +268,48 @@ with TemporaryDirectory() as tmp_dir:
 Expected output:
 
 ```text
-html Example low
+html_trafilatura Example low
+```
+
+Milestone 23 production PDF extraction can be checked from a temporary generated
+PDF:
+
+```powershell
+$env:PYTHONPATH='C:\repos\webcrawler\src'
+$env:PYTHONDONTWRITEBYTECODE='1'
+@'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import fitz
+
+from crawler.extract import extract_document
+from crawler.models import FetchedDocument
+
+with TemporaryDirectory() as tmp_dir:
+    pdf_path = Path(tmp_dir) / "report.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "Public PDF evidence about Caspian energy reporting.")
+    pdf.save(pdf_path)
+    pdf.close()
+
+    fetched = FetchedDocument(
+        document_id="doc-1",
+        source_id="source-1",
+        url="https://example.org/report.pdf",
+        content_type="application/pdf",
+        raw_cache_path=str(pdf_path),
+    )
+    extracted = extract_document(fetched)
+    print(extracted.extraction_method, extracted.page_count, extracted.error)
+'@ | python -
+```
+
+Expected output:
+
+```text
+pdf_pymupdf 1 None
 ```
 
 Milestone 7 cleaning can be checked from an extracted text record:
@@ -472,8 +577,6 @@ python -m crawler.runner --run-id crawl-expanded --stages automatic_crawl --max-
 
 Production continuation milestones:
 
-- Milestone 19: durable source onboarding workflow for proposed sources,
-  analyst approval, allow/block path review, and robots/access audit.
 - Milestone 20: production UI service boundary, replacing static HTML artifacts
   with an API-backed app while preserving the current JSONL record contract.
 
@@ -488,6 +591,239 @@ records/retry_candidates.jsonl
 `source_health.jsonl` ranks each source by access success, fetch success,
 extraction success, and claim yield. `retry_candidates.jsonl` separates
 retryable failures, such as transient fetch errors or missing robots lookup,
-from permanent skips that need policy or extractor review. The next production
-milestone is Milestone 19: proposed-source onboarding and approval before new
-domains are added to active crawling.
+from permanent skips that need policy or extractor review.
+
+Milestone 19 source onboarding keeps proposed sources separate from active
+crawling. Proposed rows go in:
+
+```text
+data/proposed_sources.csv
+```
+
+Create or refresh the proposal template:
+
+```powershell
+python -m crawler.onboarding template --path data/proposed_sources.csv
+```
+
+Validate proposed sources before review:
+
+```powershell
+python -m crawler.onboarding validate --proposed data/proposed_sources.csv
+```
+
+Promote only approved rows into the active registry:
+
+```powershell
+python -m crawler.onboarding promote --proposed data/proposed_sources.csv --active data/sources.csv
+```
+
+Only `proposal_status=approved` rows with reviewer metadata and crawl-safe
+access settings are promoted. `proposed` and `rejected` rows are never crawled
+because `automatic_crawl` reads only `data/sources.csv`.
+
+Milestone 20 adds the product API boundary. FastAPI serves crawler run artifacts
+and the same map JSON contract used by the static HTML export; Vercel/Next.js
+remains the recommended frontend host for a polished analyst UI that consumes
+this API.
+
+Run the API locally:
+
+```powershell
+python -m uvicorn crawler.api:app --reload
+```
+
+Useful endpoints:
+
+```text
+GET /health
+GET /runs
+GET /runs/{run_id}/summary
+GET /runs/{run_id}/records/{record_name}
+GET /runs/{run_id}/map-data
+GET /runs/{run_id}/map
+```
+
+Supported map filters:
+
+```text
+source_id
+claim_type
+min_trust
+include_demo_overlays
+```
+
+Open the API-backed map for a run:
+
+```text
+http://127.0.0.1:8000/runs/crawl-health/map
+```
+
+That page uses the same map shell as the static export, but it refreshes its
+data from `/runs/{run_id}/map-data`. The static HTML map remains available for
+offline reports. To generate static HTML that also refreshes from a running API,
+pass the API base URL during the crawl:
+
+```powershell
+python -m crawler.runner --run-id poc-crawl --stages automatic_crawl --max-sources 1 --max-items-per-source 1 --max-fetches 1 --timeout-seconds 10 --map-api-base-url http://127.0.0.1:8000
+```
+
+Production frontends, including a later Vercel/Next.js UI, should call
+`/runs/{run_id}/map-data` directly.
+
+Milestone 21 adds a separate frontend app for the analyst POC:
+
+```text
+frontend/
+```
+
+Run the FastAPI backend:
+
+```powershell
+python -m uvicorn crawler.api:app --host 127.0.0.1 --port 8000
+```
+
+Run the Next.js UI:
+
+```powershell
+cd frontend
+npm.cmd install
+$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
+npm.cmd run dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:3000
+```
+
+For Vercel deployment, set:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=https://<your-fastapi-api-host>
+```
+
+The Next UI provides run selection, live map-data loading, trust and claim-type
+filters, layer toggles, source/claim counts, and an evidence drawer. It is a POC
+frontend over the FastAPI contract, not a replacement for the Python crawler.
+
+Milestone 22 adds the deployment hardening boundary. Local development still
+works without auth by default:
+
+```powershell
+python -m uvicorn crawler.api:app --host 127.0.0.1 --port 8000
+cd frontend
+npm.cmd run dev
+```
+
+Environment templates are provided without real secrets:
+
+```text
+.env.example
+frontend/.env.local.example
+```
+
+Copy them to `.env.local` in the relevant directory for local use. Real
+`.env`, `.env.local`, and `.env.*.local` files are ignored by git at the repo
+root and under `frontend/`.
+
+For an internal deployment, configure the FastAPI API with exact origins,
+shared run storage, an audit log path, and a bearer token:
+
+```text
+CRAWLER_ENV=production
+CRAWLER_RUN_STORAGE_PATH=/mnt/webcrawler/runs
+CRAWLER_AUDIT_LOG_PATH=/mnt/webcrawler/audit/audit_events.jsonl
+CRAWLER_STORAGE_BACKEND=shared_filesystem
+CRAWLER_CORS_ORIGINS=https://<your-next-ui-host>
+CRAWLER_API_TOKEN=<shared-api-token>
+CRAWLER_AUTH_REQUIRED=true
+```
+
+Configure the Next UI to use its same-origin proxy so the API token stays
+server-side:
+
+```text
+CRAWLER_API_BASE_URL=https://<your-fastapi-api-host>
+CRAWLER_API_TOKEN=<shared-api-token>
+ANALYST_UI_USERNAME=<ui-user>
+ANALYST_UI_PASSWORD=<ui-password>
+ANALYST_ID=<audit-actor-label>
+```
+
+The frontend calls `/api/crawler/*` by default. That proxy forwards requests to
+`CRAWLER_API_BASE_URL` with the API bearer token. `NEXT_PUBLIC_API_BASE_URL`
+remains available for unauthenticated local direct-to-FastAPI demos.
+`CRAWLER_API_TOKEN` is the same shared bearer token configured on the FastAPI
+backend; it must not be exposed as a `NEXT_PUBLIC_*` value. `ANALYST_UI_USERNAME`
+and `ANALYST_UI_PASSWORD` protect the Next UI with Basic Auth. `ANALYST_ID` and
+`NEXT_PUBLIC_ANALYST_ID` are audit actor labels, not secrets.
+
+Analyst audit records are appended as JSONL:
+
+```text
+outputs/audit/audit_events.jsonl
+```
+
+Each record includes `event_id`, `event_type`, `actor`, `created_at`, optional
+run/claim/document/source IDs, the request path, and small metadata such as
+filter values or exported record counts. The evidence drawer can export a
+selected claim packet through `GET /runs/{run_id}/evidence-export`, which also
+records an `evidence_exported` audit event.
+
+CI verification is defined in `.github/workflows/ci.yml` and runs:
+
+```powershell
+python -m pytest
+python -m ruff check .
+cd frontend
+npm.cmd run build
+```
+
+The next production milestone is scheduled incremental crawls: add freshness
+windows, dedupe, unchanged-document handling, and change detection while
+preserving the same downstream record contracts.
+
+Milestone 24 adds scheduled incremental crawl controls. Use `scheduled_crawl`
+when you want the runner to compare against a prior run and skip unchanged
+documents downstream:
+
+```powershell
+python -m crawler.runner --run-id monitor-cycle-2 --stages scheduled_crawl --previous-run-id monitor-cycle-1 --max-sources 3 --max-items-per-source 10 --max-fetches 5
+```
+
+If `--previous-run-id` is omitted, the runner chooses the latest successful or
+partially successful run with fetched document records under `outputs/runs`.
+The run writes:
+
+```text
+records/incremental_fetches.jsonl
+```
+
+Each incremental record is classified as `new`, `changed`, `unchanged`,
+`failed`, or `skipped`. Unchanged documents are recorded but do not continue
+through extraction and claim generation, which prevents duplicate claims in
+monitoring cycles.
+
+For client-facing demos, use live API-backed runs with demo overlays disabled.
+Every visible button or control in the deployed UI should either perform a real
+action against the API-backed dataset or be removed before review. Vercel is a
+good fit for the Next UI when the FastAPI backend is hosted separately. Coolify
+or another self-hosted dashboard stack makes more sense when you want the API,
+frontend, worker, storage path, and scheduled crawler on one private server.
+Given the current `$0` constraint, prefer local demos, free-tier frontend
+hosting, or hardware you already own. Do not introduce paid warehouse, database,
+or hosting services unless that constraint changes.
+
+Milestone 25 adds local claim clustering:
+
+```text
+records/claim_clusters.jsonl
+```
+
+Each cluster groups related claims and marks the agreement state as
+`single_source`, `corroborated`, or `conflicted`. The runner includes this in
+`automatic_crawl`, `incremental_crawl`, and `scheduled_crawl`, and trust scores,
+reports, API records, map feature properties, and the Next evidence drawer use
+the cluster context.

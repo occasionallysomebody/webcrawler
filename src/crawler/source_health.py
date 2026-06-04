@@ -1,4 +1,9 @@
-"""Source health and crawl-frontier assessment."""
+"""Source health and crawl-frontier assessment.
+
+A production crawler needs to know which sources are useful, stale, blocked, or
+noisy. This module summarizes access, fetch, extraction, and claim-yield signals
+so operators can prioritize retries and source review.
+"""
 
 from __future__ import annotations
 
@@ -132,6 +137,19 @@ def frontier_log_entry(candidates: Iterable[RetryCandidate]) -> dict[str, object
 
 
 def _count_by_source(items: list[DiscoveredItem]) -> defaultdict[str, int]:
+    """Support the module's public workflow by computing count by source.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        items (list[DiscoveredItem]): Discovered crawl items being limited, checked,
+            fetched, or converted.
+    
+    Returns:
+        defaultdict[str, int]: Result produced for the next pipeline step or caller.
+    """
     counts: defaultdict[str, int] = defaultdict(int)
     for item in items:
         counts[item.source_id] += 1
@@ -139,6 +157,18 @@ def _count_by_source(items: list[DiscoveredItem]) -> defaultdict[str, int]:
 
 
 def _group_by_source(records):
+    """Support the module's public workflow by computing group by source.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        records (Any): Iterable of pipeline records to process.
+    
+    Returns:
+        Any: Result produced for the next pipeline step or caller.
+    """
     grouped = defaultdict(list)
     for record in records:
         grouped[record.source_id].append(record)
@@ -146,6 +176,20 @@ def _group_by_source(records):
 
 
 def _claims_by_document(claims: list[Claim]) -> defaultdict[str, list[Claim]]:
+    """Support the module's public workflow by computing claims by document.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        claims (list[Claim]): Claim records extracted from cleaned and redacted
+            documents.
+    
+    Returns:
+        defaultdict[str, list[Claim]]: Result produced for the next pipeline step or
+            caller.
+    """
     grouped: defaultdict[str, list[Claim]] = defaultdict(list)
     for claim in claims:
         grouped[claim.document_id].append(claim)
@@ -153,6 +197,18 @@ def _claims_by_document(claims: list[Claim]) -> defaultdict[str, list[Claim]]:
 
 
 def _fetch_success(document: FetchedDocument) -> bool:
+    """Support the module's public workflow by computing fetch success.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        document (FetchedDocument): Document record being transformed by this helper.
+    
+    Returns:
+        bool: Boolean decision used by the caller to choose the next pipeline step.
+    """
     return document.fetch_error is None and (
         document.status_code is None
         or 200 <= document.status_code < 300
@@ -171,6 +227,34 @@ def _health_score(
     extraction_failures: int,
     claims_extracted: int,
 ) -> float:
+    """Support the module's public workflow by computing health score.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        items_discovered (int): Value named ``items_discovered`` supplied by the caller
+            for this pipeline step.
+        access_allowed (int): Value named ``access_allowed`` supplied by the caller for
+            this pipeline step.
+        access_denied (int): Value named ``access_denied`` supplied by the caller for
+            this pipeline step.
+        fetch_successes (int): Value named ``fetch_successes`` supplied by the caller
+            for this pipeline step.
+        fetch_failures (int): Value named ``fetch_failures`` supplied by the caller for
+            this pipeline step.
+        extraction_successes (int): Value named ``extraction_successes`` supplied by the
+            caller for this pipeline step.
+        extraction_failures (int): Value named ``extraction_failures`` supplied by the
+            caller for this pipeline step.
+        claims_extracted (int): Value named ``claims_extracted`` supplied by the caller
+            for this pipeline step.
+    
+    Returns:
+        float: Normalized score between 0 and 1 unless the function description says
+            otherwise.
+    """
     if items_discovered == 0:
         return 0.0
     access_score = _ratio(access_allowed, access_allowed + access_denied)
@@ -195,6 +279,25 @@ def _status(
     access_denied: int,
     claims: list[Claim],
 ) -> str:
+    """Support the module's public workflow by computing status.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        health_score (float): Value named ``health_score`` supplied by the caller for
+            this pipeline step.
+        access_allowed (int): Value named ``access_allowed`` supplied by the caller for
+            this pipeline step.
+        access_denied (int): Value named ``access_denied`` supplied by the caller for
+            this pipeline step.
+        claims (list[Claim]): Claim records extracted from cleaned and redacted
+            documents.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     if access_allowed == 0 and access_denied > 0:
         return "blocked"
     if health_score >= 0.8 and claims:
@@ -214,6 +317,27 @@ def _notes(
     extraction_failures: int,
     claims_extracted: int,
 ) -> list[str]:
+    """Support the module's public workflow by computing notes.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        access_allowed (int): Value named ``access_allowed`` supplied by the caller for
+            this pipeline step.
+        access_denied (int): Value named ``access_denied`` supplied by the caller for
+            this pipeline step.
+        fetch_failures (int): Value named ``fetch_failures`` supplied by the caller for
+            this pipeline step.
+        extraction_failures (int): Value named ``extraction_failures`` supplied by the
+            caller for this pipeline step.
+        claims_extracted (int): Value named ``claims_extracted`` supplied by the caller
+            for this pipeline step.
+    
+    Returns:
+        list[str]: Result produced for the next pipeline step or caller.
+    """
     notes = []
     if access_denied:
         notes.append("access_denials_present")
@@ -231,6 +355,19 @@ def _notes(
 def _retry_candidates_for_decisions(
     decisions: list[AccessDecision],
 ) -> list[RetryCandidate]:
+    """Support the module's public workflow by computing retry candidates for decisions.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        decisions (list[AccessDecision]): Access decision records created before
+            fetching content.
+    
+    Returns:
+        list[RetryCandidate]: Result produced for the next pipeline step or caller.
+    """
     candidates: list[RetryCandidate] = []
     for decision in decisions:
         if decision.allowed:
@@ -253,6 +390,19 @@ def _retry_candidates_for_decisions(
 def _retry_candidates_for_documents(
     documents: list[FetchedDocument],
 ) -> list[RetryCandidate]:
+    """Support the module's public workflow by computing retry candidates for documents.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        documents (list[FetchedDocument]): Fetched or extracted documents available to
+            the current pipeline step.
+    
+    Returns:
+        list[RetryCandidate]: Result produced for the next pipeline step or caller.
+    """
     candidates: list[RetryCandidate] = []
     for document in documents:
         retryable = _retryable_fetch_error(document.fetch_error)
@@ -274,6 +424,22 @@ def _retry_candidates_for_extractions(
     extractions: list[ExtractedDocument],
     documents: list[FetchedDocument],
 ) -> list[RetryCandidate]:
+    """Support the module's public workflow by computing retry candidates for
+    extractions.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        extractions (list[ExtractedDocument]): Value named ``extractions`` supplied by
+            the caller for this pipeline step.
+        documents (list[FetchedDocument]): Fetched or extracted documents available to
+            the current pipeline step.
+    
+    Returns:
+        list[RetryCandidate]: Result produced for the next pipeline step or caller.
+    """
     document_by_id = {document.document_id: document for document in documents}
     candidates = []
     for extraction in extractions:
@@ -294,6 +460,19 @@ def _retry_candidates_for_extractions(
 
 
 def _retryable_fetch_error(error: str | None) -> bool:
+    """Support the module's public workflow by computing retryable fetch error.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        error (str | None): Value named ``error`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        bool: Boolean decision used by the caller to choose the next pipeline step.
+    """
     if error is None:
         return False
     return error.startswith(("url_error:", "io_error:", "http_error:5"))
@@ -310,6 +489,32 @@ def _candidate(
     document_id: str | None = None,
     next_action: str,
 ) -> RetryCandidate:
+    """Support the module's public workflow by computing candidate.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        source_id (str): Stable source identifier used to connect documents, claims, and
+            scores.
+        url (str): Public URL being normalized, checked, fetched, or cited.
+        reason (str): Value named ``reason`` supplied by the caller for this pipeline
+            step.
+        retryable (bool): Value named ``retryable`` supplied by the caller for this
+            pipeline step.
+        priority (str): Value named ``priority`` supplied by the caller for this
+            pipeline step.
+        item_id (str | None): Value named ``item_id`` supplied by the caller for this
+            pipeline step.
+        document_id (str | None): Value named ``document_id`` supplied by the caller for
+            this pipeline step.
+        next_action (str): Value named ``next_action`` supplied by the caller for this
+            pipeline step.
+    
+    Returns:
+        RetryCandidate: Result produced for the next pipeline step or caller.
+    """
     candidate_id = _stable_id(source_id, url, reason, document_id or item_id or "")
     return RetryCandidate(
         candidate_id=candidate_id,
@@ -325,11 +530,39 @@ def _candidate(
 
 
 def _stable_id(*parts: str) -> str:
+    """Support the module's public workflow by computing stable id.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        parts (str): Value named ``parts`` supplied by the caller for this pipeline
+            step.
+    
+    Returns:
+        str: String value ready for display, storage, or downstream parsing.
+    """
     digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
     return f"frontier-{digest[:16]}"
 
 
 def _ratio(numerator: int, denominator: int) -> float:
+    """Support the module's public workflow by computing ratio.
+    
+    This private helper keeps the public function small and testable. It is documented
+    because new maintainers often need to inspect these helpers when debugging a crawl
+    run.
+    
+    Args:
+        numerator (int): Top value in a ratio calculation.
+        denominator (int): Bottom value in a ratio calculation. Zero is handled
+            defensively.
+    
+    Returns:
+        float: Normalized score between 0 and 1 unless the function description says
+            otherwise.
+    """
     if denominator <= 0:
         return 0.0
     return numerator / denominator

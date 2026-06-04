@@ -7,6 +7,11 @@ This document defines the build sequence for a reusable public-source crawling a
 It is intentionally task agnostic. Domain-specific goals, source lists, customer framing, and research questions belong in `goal.md`. Technology choices and scalability guidance belong in `techstack.md`.
 
 Use this file to decide what to build next, how to verify it, and what counts as done.
+Known implementation shortcuts and production gaps are tracked in
+`docs/technical_debt.md`; update that file when new debt is discovered or when a
+milestone resolves existing debt.
+Docstrings and Sphinx pages are maintained as first-class project artifacts.
+Follow `docs/documentation_policy.rst` for every new or changed module.
 
 ## 2. Build Strategy
 
@@ -38,6 +43,9 @@ A milestone is done only when:
 - Obvious failure cases are handled.
 - The result can be reproduced from a command, notebook cell, or documented manual step.
 - Any assumptions are written down.
+- Any new or resolved technical debt is reflected in `docs/technical_debt.md`.
+- New or changed code has beginner-friendly Google-style docstrings and is
+  exported through the Sphinx documentation in `docs/`.
 - The next milestone is clear.
 
 Do not treat "code was written" as done. Treat "code produced a verified artifact" as done.
@@ -456,6 +464,8 @@ Implemented artifacts:
 
 Add a controlled path for growing beyond the starter CSV.
 
+Status: implemented.
+
 Required behavior:
 
 - Store proposed sources separately from approved sources.
@@ -469,9 +479,23 @@ Acceptance criteria:
 - Rejected or pending sources are not crawled.
 - Every active source has access-control metadata.
 
+Implemented artifacts:
+
+- `data/proposed_sources.csv`
+- `crawler.onboarding` CLI with `template`, `validate`, and `promote`
+  commands.
+- Proposed-source validation for status, proposer metadata, reviewer metadata,
+  crawlable access method, and conservative rate limits.
+- Promotion that appends only approved rows to the active source registry and
+  skips existing source IDs.
+- Tests for loading, validation failures, promotion, duplicate skips, and
+  template generation.
+
 ## 24. Milestone 20: API-Backed Production UI
 
 Move from static generated HTML toward a production app boundary.
+
+Status: implemented.
 
 Required behavior:
 
@@ -486,11 +510,415 @@ Acceptance criteria:
 - Existing JSONL run artifacts remain exportable and auditable.
 - Static HTML generation remains available for offline reports.
 
-## 25. Working Rules
+Implemented artifacts:
+
+- `crawler.api` FastAPI app.
+- `GET /health`, `GET /runs`, `GET /runs/{run_id}/summary`,
+  `GET /runs/{run_id}/records/{record_name}`, and
+  `GET /runs/{run_id}/map-data`.
+- `GET /runs/{run_id}/map` API-backed map shell that fetches live map data.
+- Map filters for source ID, claim type, minimum trust score, and demo overlays.
+- Static map generation can be configured with an API base URL and run ID, while
+  still retaining embedded data as an offline fallback.
+- Tests for run listing, summaries, record serving, map-data serving, filters,
+  API-backed map serving, unknown runs, and unsafe record names.
+- `fastapi` and `uvicorn` project dependencies.
+
+Next production direction:
+
+- Build a Vercel/Next.js analyst frontend against this FastAPI contract.
+- Add auth/RBAC and audit logging before multi-user deployment.
+- Move durable run storage from JSONL/SQLite toward PostgreSQL/object storage
+  when multiple users or scheduled jobs need shared state.
+
+## 25. Milestone 21: Next.js/Vercel Analyst UI POC
+
+Build a polished frontend POC against the FastAPI API contract.
+
+Status: implemented.
+
+Required behavior:
+
+- Keep the Python crawler and FastAPI API as the backend.
+- Add a separate Next.js app suitable for Vercel hosting.
+- Load runs from `GET /runs`.
+- Load map data from `GET /runs/{run_id}/map-data`.
+- Provide run selection, claim type and trust filters, layer toggles, and an
+  evidence drawer.
+- Use MapLibre for the Azerbaijan map.
+
+Acceptance criteria:
+
+- The frontend builds with `npm run build`.
+- Local dev server can load the FastAPI API through CORS.
+- The POC defaults to the highest-claim run and renders live claim markers.
+- Vercel deployment only needs `NEXT_PUBLIC_API_BASE_URL` configured.
+
+Implemented artifacts:
+
+- `frontend/package.json`
+- `frontend/app/page.jsx`
+- `frontend/app/layout.jsx`
+- `frontend/app/globals.css`
+- FastAPI CORS configuration for local Next development and Vercel preview URLs.
+
+Next production direction:
+
+- Deploy the Next UI against a hosted FastAPI backend.
+- Add authenticated analyst access before exposing non-local runs.
+- Add audit logs for run selection, exported evidence, and analyst notes.
+- Move shared production run artifacts out of local `outputs/` storage.
+- Add CI checks for Python tests, ruff, and `frontend` builds.
+
+## 26. Milestone 22: Deployment, Auth, and Shared Run Storage
+
+Harden the milestone 21 POC into a deployable internal application.
+
+Status: implemented.
+
+Required behavior:
+
+- Protect the FastAPI API and Next UI with an authentication boundary.
+- Record audit events for sensitive analyst actions and exported evidence.
+- Support environment-specific API base URLs, CORS origins, and deployment
+  settings.
+- Define a shared storage path for production run artifacts, such as object
+  storage plus PostgreSQL metadata, while preserving local JSONL development.
+- Add CI commands that verify the Python backend and the `frontend` app.
+
+Acceptance criteria:
+
+- A deployed UI can access only the configured API origin.
+- Unauthorized API requests are rejected.
+- Analyst actions that affect evidence review or exports are auditable.
+- Run listings and map data can come from shared production storage.
+- CI runs `python -m pytest`, `python -m ruff check .`, and
+  `npm.cmd run build` in `frontend`.
+
+Debt addressed:
+
+- TD-004, TD-005.
+
+Implemented artifacts:
+
+- Environment-driven API deployment settings in `crawler.config`.
+- FastAPI bearer-token protection for run, record, map-data, audit, map, and
+  evidence-export endpoints when auth is configured.
+- Analyst audit records in `outputs/audit/audit_events.jsonl` by default, with
+  `POST /audit-events` and audited `GET /runs/{run_id}/evidence-export`.
+- Configurable run storage root through `CRAWLER_RUN_STORAGE_PATH`, preserving
+  local JSONL development while allowing deployments to mount or sync shared
+  run artifacts outside `outputs/`.
+- Exact CORS origin configuration through `CRAWLER_CORS_ORIGINS` and optional
+  controlled preview regex through `CRAWLER_CORS_ORIGIN_REGEX`.
+- Next.js same-origin API proxy that keeps `CRAWLER_API_TOKEN` server-side, plus
+  optional UI Basic Auth through `ANALYST_UI_USERNAME` and
+  `ANALYST_UI_PASSWORD`.
+- GitHub Actions workflow that runs `python -m pytest`,
+  `python -m ruff check .`, and `npm.cmd run build` in `frontend`.
+
+Next production direction:
+
+- Replace the shared-filesystem JSONL storage root with managed PostgreSQL
+  metadata and object storage adapters in Milestone 27.
+- Add UI smoke tests and dependency hardening in Milestone 29.
+
+## 27. Milestone 23: Production Extractors
+
+Replace prototype extraction with reliable, source-aware extraction for public
+HTML pages and PDF reports.
+
+Status: implemented.
+
+Required behavior:
+
+- Add a production HTML extractor, such as `trafilatura` or `readability-lxml`,
+  behind the existing extraction contract.
+- Add PDF extraction with page-level provenance using `pymupdf` or `pdfplumber`.
+- Preserve source URL, retrieval time, content type, page number where relevant,
+  title, publication date hints, and extraction quality.
+- Keep unsupported or failed extraction explicit in records and logs.
+- Add fixture tests for HTML boilerplate removal, article extraction, PDF text,
+  malformed content, and extraction failure records.
+
+Acceptance criteria:
+
+- Public HTML reports produce cleaner text than the prototype parser.
+- Public PDF reports produce page-linked extracted text.
+- Extraction errors do not stop the crawl run.
+- Existing downstream cleaning, redaction, claim extraction, trust scoring, and
+  map data contracts still work.
+- `docs/technical_debt.md` is updated for TD-001 and TD-002.
+
+Debt addressed:
+
+- TD-001, TD-002.
+
+Implemented artifacts:
+
+- `crawler.extract` now prefers Trafilatura for public HTML extraction and
+  retains the prior deterministic parser as a fallback for malformed or low
+  signal pages.
+- PDF extraction uses PyMuPDF and records page count, PDF metadata, and
+  per-page text-length/word-count metadata while preserving the common
+  `ExtractedDocument` contract.
+- Malformed PDFs and failed extractor calls return explicit failed extraction
+  records instead of stopping a crawl.
+- Runtime dependencies now include `trafilatura` and `pymupdf`.
+- Tests cover HTML boilerplate behavior, PDF text extraction, page metadata,
+  malformed PDF failure records, and batch continuation.
+
+Next production direction:
+
+- Add scheduled incremental crawls, freshness windows, dedupe, and change
+  detection in Milestone 24.
+
+## 28. Milestone 24: Scheduler And Incremental Crawls
+
+Move from manual bounded runs to repeat monitoring cycles.
+
+Status: implemented.
+
+Required behavior:
+
+- Add a scheduler entry point for recurring approved-source crawls.
+- Track freshness windows, last successful fetch, checksums, ETags, and
+  last-modified values where available.
+- Avoid refetching unchanged documents unless the source health policy requires
+  it.
+- Record new, changed, unchanged, failed, and skipped items separately.
+- Keep command-line bounded crawl controls for local reproducibility.
+
+Acceptance criteria:
+
+- A scheduled run can resume from previous run metadata.
+- Unchanged content is detected and logged without duplicating claim records.
+- Changed content creates a new versioned document record.
+- Source health uses incremental results.
+- `docs/technical_debt.md` is updated for TD-006.
+
+Debt addressed:
+
+- TD-006.
+
+Implemented artifacts:
+
+- `scheduled_crawl` and `incremental_crawl` runner presets for recurring
+  approved-source monitoring.
+- `--previous-run-id` support plus automatic latest-prior-run detection when a
+  previous run is not supplied.
+- `records/incremental_fetches.jsonl` with `new`, `changed`, `unchanged`,
+  `failed`, and `skipped` statuses.
+- Conditional fetch reuse through prior ETag and Last-Modified metadata.
+- Downstream extraction, cleaning, redaction, signal extraction, and trust
+  scoring are skipped for unchanged documents to avoid duplicate claim records.
+- Run summaries include previous run ID and incremental status counts.
+- FastAPI can serve `incremental_fetches` through the record endpoint.
+
+Next production direction:
+
+- Make corroboration and contradiction visible in reports, API responses, and
+  the analyst UI in Milestone 25.
+
+## 29. Milestone 25: Corroboration And Contradiction Detection
+
+Promote extracted claims from isolated records into cross-source intelligence.
+
+Status: implemented.
+
+Required behavior:
+
+- Cluster similar claims by entity, asset, topic, location, and time window.
+- Count corroborating sources by source tier and publisher type.
+- Flag contradictions between official, corporate, NGO, academic, and media
+  sources.
+- Add explainable corroboration and conflict fields to trust scoring.
+- Expose corroboration and contradiction status through reports, API responses,
+  and the analyst UI.
+
+Acceptance criteria:
+
+- Similar claims from independent sources are grouped without losing individual
+  citations.
+- Conflicting claims are visible and cited.
+- Trust scores include corroboration and conflict explanations.
+- Reports and map detail panels show source agreement or disagreement.
+
+Implemented artifacts:
+
+- `crawler.corroboration` clusters related claims by claim type and normalized
+  entities using deterministic local rules.
+- `ClaimCluster` records are written to `records/claim_clusters.jsonl` with
+  `single_source`, `corroborated`, or `conflicted` status.
+- The runner includes `detect_corroboration` in automatic, incremental, and
+  scheduled crawls before trust scoring.
+- Trust scoring now uses claim clusters for corroborating sources and conflict
+  penalties.
+- Claim records, map features, Markdown reports, and the Next evidence drawer
+  expose source agreement or disagreement context.
+- FastAPI serves `claim_clusters` through the record endpoint.
+
+Zero-cost implementation note:
+
+- Corroboration is intentionally local and rule-based. Do not add Snowflake,
+  paid NLP services, or hosted vector databases for this milestone.
+
+Next production direction:
+
+- Add analyst review decisions, review notes, and review-status API/UI fields in
+  Milestone 26.
+
+## 30. Milestone 26: Analyst Review Workflow
+
+Add human review so the system supports due-diligence workflows instead of only
+automated summaries.
+
+Status: not started.
+
+Required behavior:
+
+- Let analysts mark claims as confirmed, rejected, needs review, or watchlisted.
+- Store analyst notes separately from extracted source evidence.
+- Keep review events auditable with user, timestamp, run ID, and claim ID.
+- Add evidence export packets for selected claims, sources, and map zones.
+- Preserve immutable original crawler records.
+
+Acceptance criteria:
+
+- Analyst decisions do not overwrite extracted claims.
+- Review status is visible in API responses and the UI.
+- Exported evidence packets include citations, retrieval metadata, trust fields,
+  and review notes.
+- Audit records can reconstruct who reviewed or exported evidence.
+
+## 31. Milestone 27: Production Storage Implementation
+
+Implement shared run storage after the storage boundary is defined.
+
+Status: not started.
+
+Required behavior:
+
+- Store run metadata, sources, documents, claims, trust scores, review status,
+  and audit events in a durable database.
+- Store raw cache artifacts, extracted text, reports, and exports in object
+  storage or a configured filesystem adapter.
+- Keep local JSONL mode for development and reproducible tests.
+- Add migrations or schema versioning for production tables.
+- Add repository/service abstractions only where they simplify API and runner
+  integration.
+
+Acceptance criteria:
+
+- The API can list and serve runs from shared storage.
+- The runner can write production records without breaking local mode.
+- Tests cover both local and production storage adapters where practical.
+- Run artifacts remain auditable and exportable.
+
+Debt addressed:
+
+- TD-004.
+
+## 32. Milestone 28: Observability And Source Operations
+
+Make the production crawler operable by surfacing health, failures, freshness,
+and source yield.
+
+Status: not started.
+
+Required behavior:
+
+- Emit structured metrics for crawl duration, source success, fetch failures,
+  extraction failures, claim yield, retries, and skipped access decisions.
+- Add operational dashboards or API endpoints for source health and run health.
+- Add alert rules for stale high-value sources, repeated failures, and sudden
+  claim-yield changes.
+- Keep logs safe for compliance review and avoid raw sensitive content in logs.
+
+Acceptance criteria:
+
+- Operators can identify stale, blocked, noisy, and high-yield sources quickly.
+- Alerts include source ID, run ID, reason, and recommended next action.
+- Metrics distinguish access, fetch, extraction, and signal-quality failures.
+- Operational views do not expose unnecessary raw content.
+
+## 33. Milestone 29: CI/CD And Dependency Hardening
+
+Make verification and deployment repeatable.
+
+Status: not started.
+
+Required behavior:
+
+- Add CI for Python tests, ruff, frontend install, frontend build, and audit
+  reporting.
+- Add an explicit deployment path from local development to a hosted client
+  environment: Vercel for the Next UI plus hosted FastAPI, or a self-hosted
+  stack such as Coolify when one-box operations, private networking, and
+  filesystem/object-storage control matter more than managed frontend hosting.
+- Add dependency update policy for Python and Node packages.
+- Add deployment checks for API environment variables, CORS origins, auth
+  settings, and frontend API base URL.
+- Add browser smoke testing for the analyst UI.
+- Browser smoke tests must verify real API-backed crawled records are shown and
+  that interactive controls are functional, including run selection, filters,
+  layer toggles, evidence drawer selection, refresh, and evidence export.
+- Document rollback and local reproduction steps.
+
+Acceptance criteria:
+
+- CI blocks changes that break backend tests, linting, or frontend builds.
+- Dependency audit findings are documented or resolved before production
+  deployment.
+- Browser smoke tests verify the map page loads and can fetch live API data.
+- A deployed reviewer URL shows records extracted from crawled/scraped approved
+  sources, not hardcoded mock claims or demo-only overlays.
+- Buttons and controls used in the demo perform real actions or are removed
+  before client review.
+- Deployment configuration can be reproduced from documentation.
+
+Debt addressed:
+
+- TD-003, TD-007.
+
+## 34. Milestone 30: Evaluation Pack And Commercial Demo Readiness
+
+Package the Azerbaijan case study into a credible proof-of-concept demo for
+technical, compliance, and business audiences.
+
+Status: not started.
+
+Required behavior:
+
+- Define a fixed evaluation source set and time window.
+- Produce a cited Azerbaijan energy intelligence brief from representative
+  crawler runs.
+- Include source coverage, known gaps, trust-score explanations, contradictions,
+  and analyst review examples.
+- Add a reproducible demo script that starts the API, frontend, and a selected
+  run.
+- Include a client-review deployment checklist with the chosen hosting path,
+  auth settings, seeded real crawl run, and disabled demo overlays.
+- Document what is production-ready, what is prototype-only, and which debt
+  remains open.
+
+Acceptance criteria:
+
+- A reviewer can reproduce the demo from documented commands.
+- The UI shows live API-backed run data, not hardcoded intelligence overlays.
+- All visible client-facing buttons and filters are functional against the live
+  API-backed dataset.
+- The report cites every claim and includes uncertainty notes.
+- The technical debt register matches the demo limitations.
+- The project can justify the next investment decision: stop, pilot, or build
+  toward production.
+
+## 35. Working Rules
 
 - Prefer small changes with visible outputs.
 - Keep domain logic configurable.
 - Keep source access rules separate from extraction logic.
 - Keep raw caches separate from cleaned outputs.
 - Do not add a heavier tool until the simpler version is limiting real work.
+- Keep Google-style docstrings and Sphinx API pages current with code changes.
 - Update this plan when the project changes direction.

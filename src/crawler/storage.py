@@ -1,4 +1,9 @@
-"""Local JSONL and SQLite storage for pipeline records."""
+"""Local JSONL and SQLite storage helpers.
+
+The project starts with simple durable storage so every stage can be inspected
+without a production database. JSONL gives transparent audit artifacts, while
+SQLite supports local structured lookup and duplicate checks.
+"""
 
 from __future__ import annotations
 
@@ -212,12 +217,16 @@ def storage_log_entry(
 def record_id(payload: dict[str, Any]) -> str:
     """Return the canonical ID field for a serialized record payload."""
     for key in (
+        "event_id",
+        "incremental_id",
+        "cluster_id",
         "source_id",
         "run_id",
         "item_id",
         "document_id",
         "entity_id",
         "claim_id",
+        "candidate_id",
     ):
         value = payload.get(key)
         if value:
