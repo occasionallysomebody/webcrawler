@@ -7,6 +7,11 @@ project is intentionally staged: start with local files and testable modules,
 then add more pipeline stages only after each earlier stage produces a verified
 artifact.
 
+#### Notes to self for future
+- exa to crawl for similar urls -> firecrawl to scrape contents -> deepseek to format text into frontend insights?
+- currently overcomplicated architecture and too many custom scripts
+- use apis instead of csv file links
+
 ## Client-Friendly Overview
 
 | Question | Short answer | What this means in practice |
